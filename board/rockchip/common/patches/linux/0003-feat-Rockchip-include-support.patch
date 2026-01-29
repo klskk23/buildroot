@@ -1,0 +1,4031 @@
+From f9728cc629b18d5325f839e56630f7b750c41e90 Mon Sep 17 00:00:00 2001
+From: yanjilu <yanjilu@mixwan.net>
+Date: Tue, 27 Jan 2026 09:40:35 +0800
+Subject: [PATCH 3/4] feat: Rockchip include support.
+
+---
+ include/drm/bridge/analogix_dp.h              |    7 +-
+ include/drm/bridge/dw_hdmi_qp.h               |   32 +
+ include/drm/bridge/dw_mipi_dsi2.h             |   95 ++
+ include/dt-bindings/clock/rk3528-cru.h        |  746 ++++++++
+ .../dt-bindings/clock/rockchip,rk3576-cru.h   |    5 +
+ include/dt-bindings/clock/rockchip-ddr.h      |   63 +
+ include/dt-bindings/memory/rk3328-dram.h      |  159 ++
+ include/dt-bindings/power/rk3528-power.h      |   18 +
+ include/linux/compiler.h                      |   22 +
+ include/linux/compiler.h.orig                 |  303 ++++
+ include/linux/hw_bitfield.h                   |   62 +
+ include/linux/mfd/rockchip-mfpwm.h            |  454 +++++
+ include/linux/phy/phy-hdmi.h                  |   21 +
+ include/linux/phy/phy.h                       |    7 +-
+ include/linux/pwm.h                           |   78 +-
+ include/linux/stmmac.h                        |    1 +
+ include/soc/rockchip/rockchip_sip.h           |   14 +
+ include/trace/events/pwm.h                    |  134 +-
+ include/ufs/ufshcd.h                          |    2 +
+ include/ufs/ufshcd.h.orig                     | 1499 +++++++++++++++++
+ 20 files changed, 3709 insertions(+), 13 deletions(-)
+ create mode 100644 include/drm/bridge/dw_hdmi_qp.h
+ create mode 100644 include/drm/bridge/dw_mipi_dsi2.h
+ create mode 100644 include/dt-bindings/clock/rk3528-cru.h
+ create mode 100644 include/dt-bindings/clock/rockchip-ddr.h
+ create mode 100644 include/dt-bindings/memory/rk3328-dram.h
+ create mode 100644 include/dt-bindings/power/rk3528-power.h
+ create mode 100644 include/linux/compiler.h.orig
+ create mode 100644 include/linux/hw_bitfield.h
+ create mode 100644 include/linux/mfd/rockchip-mfpwm.h
+ create mode 100644 include/linux/phy/phy-hdmi.h
+ create mode 100644 include/ufs/ufshcd.h.orig
+
+diff --git a/include/drm/bridge/analogix_dp.h b/include/drm/bridge/analogix_dp.h
+index 6002c5666..cf17646c1 100644
+--- a/include/drm/bridge/analogix_dp.h
++++ b/include/drm/bridge/analogix_dp.h
+@@ -10,16 +10,18 @@
+ #include <drm/drm_crtc.h>
+ 
+ struct analogix_dp_device;
++struct drm_dp_aux;
+ 
+ enum analogix_dp_devtype {
+ 	EXYNOS_DP,
+ 	RK3288_DP,
+ 	RK3399_EDP,
++	RK3588_EDP,
+ };
+ 
+ static inline bool is_rockchip(enum analogix_dp_devtype type)
+ {
+-	return type == RK3288_DP || type == RK3399_EDP;
++	return type == RK3288_DP || type == RK3399_EDP || type == RK3588_EDP;
+ }
+ 
+ struct analogix_dp_plat_data {
+@@ -48,4 +50,7 @@ void analogix_dp_unbind(struct analogix_dp_device *dp);
+ int analogix_dp_start_crc(struct drm_connector *connector);
+ int analogix_dp_stop_crc(struct drm_connector *connector);
+ 
++struct analogix_dp_plat_data *analogix_dp_aux_to_plat_data(struct drm_dp_aux *aux);
++struct drm_dp_aux *analogix_dp_get_aux(struct analogix_dp_device *dp);
++
+ #endif /* _ANALOGIX_DP_H_ */
+diff --git a/include/drm/bridge/dw_hdmi_qp.h b/include/drm/bridge/dw_hdmi_qp.h
+new file mode 100644
+index 000000000..e9be6d507
+--- /dev/null
++++ b/include/drm/bridge/dw_hdmi_qp.h
+@@ -0,0 +1,32 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (c) 2021-2022 Rockchip Electronics Co., Ltd.
++ * Copyright (c) 2024 Collabora Ltd.
++ */
++
++#ifndef __DW_HDMI_QP__
++#define __DW_HDMI_QP__
++
++struct device;
++struct drm_encoder;
++struct dw_hdmi_qp;
++struct platform_device;
++
++struct dw_hdmi_qp_phy_ops {
++	int (*init)(struct dw_hdmi_qp *hdmi, void *data);
++	void (*disable)(struct dw_hdmi_qp *hdmi, void *data);
++	enum drm_connector_status (*read_hpd)(struct dw_hdmi_qp *hdmi, void *data);
++	void (*setup_hpd)(struct dw_hdmi_qp *hdmi, void *data);
++};
++
++struct dw_hdmi_qp_plat_data {
++	const struct dw_hdmi_qp_phy_ops *phy_ops;
++	void *phy_data;
++	int main_irq;
++};
++
++struct dw_hdmi_qp *dw_hdmi_qp_bind(struct platform_device *pdev,
++				   struct drm_encoder *encoder,
++				   const struct dw_hdmi_qp_plat_data *plat_data);
++void dw_hdmi_qp_resume(struct device *dev, struct dw_hdmi_qp *hdmi);
++#endif /* __DW_HDMI_QP__ */
+diff --git a/include/drm/bridge/dw_mipi_dsi2.h b/include/drm/bridge/dw_mipi_dsi2.h
+new file mode 100644
+index 000000000..c18c49379
+--- /dev/null
++++ b/include/drm/bridge/dw_mipi_dsi2.h
+@@ -0,0 +1,95 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2024, Fuzhou Rockchip Electronics Co., Ltd
++ *
++ * Authors: Guochun Huang <hero.huang@rock-chips.com>
++ *          Heiko Stuebner <heiko.stuebner@cherry.de>
++ */
++
++#ifndef __DW_MIPI_DSI2__
++#define __DW_MIPI_DSI2__
++
++#include <linux/regmap.h>
++#include <linux/types.h>
++
++#include <drm/drm_atomic.h>
++#include <drm/drm_bridge.h>
++#include <drm/drm_connector.h>
++#include <drm/drm_crtc.h>
++#include <drm/drm_modes.h>
++
++struct drm_display_mode;
++struct drm_encoder;
++struct dw_mipi_dsi2;
++struct mipi_dsi_device;
++struct platform_device;
++
++enum dw_mipi_dsi2_phy_type {
++	DW_MIPI_DSI2_DPHY,
++	DW_MIPI_DSI2_CPHY,
++};
++
++struct dw_mipi_dsi2_phy_iface {
++	int ppi_width;
++	enum dw_mipi_dsi2_phy_type phy_type;
++};
++
++struct dw_mipi_dsi2_phy_timing {
++	u32 data_hs2lp;
++	u32 data_lp2hs;
++};
++
++struct dw_mipi_dsi2_phy_ops {
++	int (*init)(void *priv_data);
++	void (*power_on)(void *priv_data);
++	void (*power_off)(void *priv_data);
++	void (*get_interface)(void *priv_data, struct dw_mipi_dsi2_phy_iface *iface);
++	int (*get_lane_mbps)(void *priv_data,
++			     const struct drm_display_mode *mode,
++			     unsigned long mode_flags, u32 lanes, u32 format,
++			     unsigned int *lane_mbps);
++	int (*get_timing)(void *priv_data, unsigned int lane_mbps,
++			  struct dw_mipi_dsi2_phy_timing *timing);
++	int (*get_esc_clk_rate)(void *priv_data, unsigned int *esc_clk_rate);
++};
++
++struct dw_mipi_dsi2_host_ops {
++	int (*attach)(void *priv_data,
++		      struct mipi_dsi_device *dsi);
++	int (*detach)(void *priv_data,
++		      struct mipi_dsi_device *dsi);
++};
++
++struct dw_mipi_dsi2_plat_data {
++	struct regmap *regmap;
++	unsigned int max_data_lanes;
++
++	enum drm_mode_status (*mode_valid)(void *priv_data,
++					   const struct drm_display_mode *mode,
++					   unsigned long mode_flags,
++					   u32 lanes, u32 format);
++
++	bool (*mode_fixup)(void *priv_data, const struct drm_display_mode *mode,
++			   struct drm_display_mode *adjusted_mode);
++
++	u32 *(*get_input_bus_fmts)(void *priv_data,
++				   struct drm_bridge *bridge,
++				   struct drm_bridge_state *bridge_state,
++				   struct drm_crtc_state *crtc_state,
++				   struct drm_connector_state *conn_state,
++				   u32 output_fmt,
++				   unsigned int *num_input_fmts);
++
++	const struct dw_mipi_dsi2_phy_ops *phy_ops;
++	const struct dw_mipi_dsi2_host_ops *host_ops;
++
++	void *priv_data;
++};
++
++struct dw_mipi_dsi2 *dw_mipi_dsi2_probe(struct platform_device *pdev,
++					const struct dw_mipi_dsi2_plat_data *plat_data);
++void dw_mipi_dsi2_remove(struct dw_mipi_dsi2 *dsi2);
++int dw_mipi_dsi2_bind(struct dw_mipi_dsi2 *dsi2, struct drm_encoder *encoder);
++void dw_mipi_dsi2_unbind(struct dw_mipi_dsi2 *dsi2);
++
++#endif /* __DW_MIPI_DSI2__ */
+diff --git a/include/dt-bindings/clock/rk3528-cru.h b/include/dt-bindings/clock/rk3528-cru.h
+new file mode 100644
+index 000000000..5ec1681ca
+--- /dev/null
++++ b/include/dt-bindings/clock/rk3528-cru.h
+@@ -0,0 +1,746 @@
++/* SPDX-License-Identifier: (GPL-2.0+ OR MIT) */
++/*
++ * Copyright (c) 2022 Rockchip Electronics Co. Ltd.
++ * Author: Joseph Chen <chenjh@rock-chips.com>
++ */
++
++#ifndef _DT_BINDINGS_CLK_ROCKCHIP_RK3528_H
++#define _DT_BINDINGS_CLK_ROCKCHIP_RK3528_H
++
++/* cru-clocks indices */
++
++/* core clocks */
++#define PLL_APLL                       1
++#define PLL_CPLL                       2
++#define PLL_GPLL                       3
++#define PLL_PPLL                       4
++#define PLL_DPLL                       5
++#define ARMCLK                         6
++
++#define XIN_OSC0_HALF                  8
++#define CLK_MATRIX_50M_SRC             9
++#define CLK_MATRIX_100M_SRC            10
++#define CLK_MATRIX_150M_SRC            11
++#define CLK_MATRIX_200M_SRC            12
++#define CLK_MATRIX_250M_SRC            13
++#define CLK_MATRIX_300M_SRC            14
++#define CLK_MATRIX_339M_SRC            15
++#define CLK_MATRIX_400M_SRC            16
++#define CLK_MATRIX_500M_SRC            17
++#define CLK_MATRIX_600M_SRC            18
++#define CLK_UART0_SRC                  19
++#define CLK_UART0_FRAC                 20
++#define SCLK_UART0                     21
++#define CLK_UART1_SRC                  22
++#define CLK_UART1_FRAC                 23
++#define SCLK_UART1                     24
++#define CLK_UART2_SRC                  25
++#define CLK_UART2_FRAC                 26
++#define SCLK_UART2                     27
++#define CLK_UART3_SRC                  28
++#define CLK_UART3_FRAC                 29
++#define SCLK_UART3                     30
++#define CLK_UART4_SRC                  31
++#define CLK_UART4_FRAC                 32
++#define SCLK_UART4                     33
++#define CLK_UART5_SRC                  34
++#define CLK_UART5_FRAC                 35
++#define SCLK_UART5                     36
++#define CLK_UART6_SRC                  37
++#define CLK_UART6_FRAC                 38
++#define SCLK_UART6                     39
++#define CLK_UART7_SRC                  40
++#define CLK_UART7_FRAC                 41
++#define SCLK_UART7                     42
++#define CLK_I2S0_2CH_SRC               43
++#define CLK_I2S0_2CH_FRAC              44
++#define MCLK_I2S0_2CH_SAI_SRC          45
++#define CLK_I2S3_8CH_SRC               46
++#define CLK_I2S3_8CH_FRAC              47
++#define MCLK_I2S3_8CH_SAI_SRC          48
++#define CLK_I2S1_8CH_SRC               49
++#define CLK_I2S1_8CH_FRAC              50
++#define MCLK_I2S1_8CH_SAI_SRC          51
++#define CLK_I2S2_2CH_SRC               52
++#define CLK_I2S2_2CH_FRAC              53
++#define MCLK_I2S2_2CH_SAI_SRC          54
++#define CLK_SPDIF_SRC                  55
++#define CLK_SPDIF_FRAC                 56
++#define MCLK_SPDIF_SRC                 57
++#define DCLK_VOP_SRC0                  58
++#define DCLK_VOP_SRC1                  59
++#define CLK_HSM                        60
++#define CLK_CORE_SRC_ACS               63
++#define CLK_CORE_SRC_PVTMUX            65
++#define CLK_CORE_SRC                   66
++#define CLK_CORE                       67
++#define ACLK_M_CORE_BIU                68
++#define CLK_CORE_PVTPLL_SRC            69
++#define PCLK_DBG                       70
++#define SWCLKTCK                       71
++#define CLK_SCANHS_CORE                72
++#define CLK_SCANHS_ACLKM_CORE          73
++#define CLK_SCANHS_PCLK_DBG            74
++#define CLK_SCANHS_PCLK_CPU_BIU        76
++#define PCLK_CPU_ROOT                  77
++#define PCLK_CORE_GRF                  78
++#define PCLK_DAPLITE_BIU               79
++#define PCLK_CPU_BIU                   80
++#define CLK_REF_PVTPLL_CORE            81
++#define ACLK_BUS_VOPGL_ROOT            85
++#define ACLK_BUS_VOPGL_BIU             86
++#define ACLK_BUS_H_ROOT                87
++#define ACLK_BUS_H_BIU                 88
++#define ACLK_BUS_ROOT                  89
++#define HCLK_BUS_ROOT                  90
++#define PCLK_BUS_ROOT                  91
++#define ACLK_BUS_M_ROOT                92
++#define ACLK_SYSMEM_BIU                93
++#define CLK_TIMER_ROOT                 95
++#define ACLK_BUS_BIU                   96
++#define HCLK_BUS_BIU                   97
++#define PCLK_BUS_BIU                   98
++#define PCLK_DFT2APB                   99
++#define PCLK_BUS_GRF                   100
++#define ACLK_BUS_M_BIU                 101
++#define ACLK_GIC                       102
++#define ACLK_SPINLOCK                  103
++#define ACLK_DMAC                      104
++#define PCLK_TIMER                     105
++#define CLK_TIMER0                     106
++#define CLK_TIMER1                     107
++#define CLK_TIMER2                     108
++#define CLK_TIMER3                     109
++#define CLK_TIMER4                     110
++#define CLK_TIMER5                     111
++#define PCLK_JDBCK_DAP                 112
++#define CLK_JDBCK_DAP                  113
++#define PCLK_WDT_NS                    114
++#define TCLK_WDT_NS                    115
++#define HCLK_TRNG_NS                   116
++#define PCLK_UART0                     117
++#define PCLK_DMA2DDR                   123
++#define ACLK_DMA2DDR                   124
++#define PCLK_PWM0                      126
++#define CLK_PWM0                       127
++#define CLK_CAPTURE_PWM0               128
++#define PCLK_PWM1                      129
++#define CLK_PWM1                       130
++#define CLK_CAPTURE_PWM1               131
++#define PCLK_SCR                       134
++#define ACLK_DCF                       135
++#define PCLK_INTMUX                    138
++#define CLK_PPLL_I                     141
++#define CLK_PPLL_MUX                   142
++#define CLK_PPLL_100M_MATRIX           143
++#define CLK_PPLL_50M_MATRIX            144
++#define CLK_REF_PCIE_INNER_PHY         145
++#define CLK_REF_PCIE_100M_PHY          146
++#define ACLK_VPU_L_ROOT                147
++#define CLK_GMAC1_VPU_25M              148
++#define CLK_PPLL_125M_MATRIX           149
++#define ACLK_VPU_ROOT                  150
++#define HCLK_VPU_ROOT                  151
++#define PCLK_VPU_ROOT                  152
++#define ACLK_VPU_BIU                   153
++#define HCLK_VPU_BIU                   154
++#define PCLK_VPU_BIU                   155
++#define ACLK_VPU                       156
++#define HCLK_VPU                       157
++#define PCLK_CRU_PCIE                  158
++#define PCLK_VPU_GRF                   159
++#define HCLK_SFC                       160
++#define SCLK_SFC                       161
++#define CCLK_SRC_EMMC                  163
++#define HCLK_EMMC                      164
++#define ACLK_EMMC                      165
++#define BCLK_EMMC                      166
++#define TCLK_EMMC                      167
++#define PCLK_GPIO1                     168
++#define DBCLK_GPIO1                    169
++#define ACLK_VPU_L_BIU                 172
++#define PCLK_VPU_IOC                   173
++#define HCLK_SAI_I2S0                  174
++#define MCLK_SAI_I2S0                  175
++#define HCLK_SAI_I2S2                  176
++#define MCLK_SAI_I2S2                  177
++#define PCLK_ACODEC                    178
++#define MCLK_ACODEC_TX                 179
++#define PCLK_GPIO3                     186
++#define DBCLK_GPIO3                    187
++#define PCLK_SPI1                      189
++#define CLK_SPI1                       190
++#define SCLK_IN_SPI1                   191
++#define PCLK_UART2                     192
++#define PCLK_UART5                     194
++#define PCLK_UART6                     196
++#define PCLK_UART7                     198
++#define PCLK_I2C3                      200
++#define CLK_I2C3                       201
++#define PCLK_I2C5                      202
++#define CLK_I2C5                       203
++#define PCLK_I2C6                      204
++#define CLK_I2C6                       205
++#define ACLK_MAC_VPU                   206
++#define PCLK_MAC_VPU                   207
++#define CLK_GMAC1_RMII_VPU             209
++#define CLK_GMAC1_SRC_VPU              210
++#define PCLK_PCIE                      215
++#define CLK_PCIE_AUX                   216
++#define ACLK_PCIE                      217
++#define HCLK_PCIE_SLV                  218
++#define HCLK_PCIE_DBI                  219
++#define PCLK_PCIE_PHY                  220
++#define PCLK_PIPE_GRF                  221
++#define CLK_PIPE_USB3OTG_COMBO         230
++#define CLK_UTMI_USB3OTG               232
++#define CLK_PCIE_PIPE_PHY              235
++#define CCLK_SRC_SDIO0                 240
++#define HCLK_SDIO0                     241
++#define CCLK_SRC_SDIO1                 244
++#define HCLK_SDIO1                     245
++#define CLK_TS_0                       246
++#define CLK_TS_1                       247
++#define PCLK_CAN2                      250
++#define CLK_CAN2                       251
++#define PCLK_CAN3                      252
++#define CLK_CAN3                       253
++#define PCLK_SARADC                    256
++#define CLK_SARADC                     257
++#define PCLK_TSADC                     258
++#define CLK_TSADC                      259
++#define CLK_TSADC_TSEN                 260
++#define ACLK_USB3OTG                   261
++#define CLK_REF_USB3OTG                262
++#define CLK_SUSPEND_USB3OTG            263
++#define ACLK_GPU_ROOT                  269
++#define PCLK_GPU_ROOT                  270
++#define ACLK_GPU_BIU                   271
++#define PCLK_GPU_BIU                   272
++#define ACLK_GPU                       273
++#define CLK_GPU_PVTPLL_SRC             274
++#define ACLK_GPU_MALI                  275
++#define HCLK_RKVENC_ROOT               281
++#define ACLK_RKVENC_ROOT               282
++#define PCLK_RKVENC_ROOT               283
++#define HCLK_RKVENC_BIU                284
++#define ACLK_RKVENC_BIU                285
++#define PCLK_RKVENC_BIU                286
++#define HCLK_RKVENC                    287
++#define ACLK_RKVENC                    288
++#define CLK_CORE_RKVENC                289
++#define HCLK_SAI_I2S1                  290
++#define MCLK_SAI_I2S1                  291
++#define PCLK_I2C1                      292
++#define CLK_I2C1                       293
++#define PCLK_I2C0                      294
++#define CLK_I2C0                       295
++#define CLK_UART_JTAG                  296
++#define PCLK_SPI0                      297
++#define CLK_SPI0                       298
++#define SCLK_IN_SPI0                   299
++#define PCLK_GPIO4                     300
++#define DBCLK_GPIO4                    301
++#define PCLK_RKVENC_IOC                302
++#define HCLK_SPDIF                     308
++#define MCLK_SPDIF                     309
++#define HCLK_PDM                       310
++#define MCLK_PDM                       311
++#define PCLK_UART1                     315
++#define PCLK_UART3                     317
++#define PCLK_RKVENC_GRF                319
++#define PCLK_CAN0                      320
++#define CLK_CAN0                       321
++#define PCLK_CAN1                      322
++#define CLK_CAN1                       323
++#define ACLK_VO_ROOT                   324
++#define HCLK_VO_ROOT                   325
++#define PCLK_VO_ROOT                   326
++#define ACLK_VO_BIU                    327
++#define HCLK_VO_BIU                    328
++#define PCLK_VO_BIU                    329
++#define HCLK_RGA2E                     330
++#define ACLK_RGA2E                     331
++#define CLK_CORE_RGA2E                 332
++#define HCLK_VDPP                      333
++#define ACLK_VDPP                      334
++#define CLK_CORE_VDPP                  335
++#define PCLK_VO_GRF                    336
++#define PCLK_CRU                       337
++#define ACLK_VOP_ROOT                  338
++#define ACLK_VOP_BIU                   339
++#define HCLK_VOP                       340
++#define DCLK_VOP0                      341
++#define DCLK_VOP1                      342
++#define ACLK_VOP                       343
++#define PCLK_HDMI                      344
++#define CLK_SFR_HDMI                   345
++#define CLK_CEC_HDMI                   346
++#define CLK_SPDIF_HDMI                 347
++#define CLK_HDMIPHY_TMDSSRC            348
++#define CLK_HDMIPHY_PREP               349
++#define PCLK_HDMIPHY                   352
++#define HCLK_HDCP_KEY                  354
++#define ACLK_HDCP                      355
++#define HCLK_HDCP                      356
++#define PCLK_HDCP                      357
++#define HCLK_CVBS                      358
++#define DCLK_CVBS                      359
++#define DCLK_4X_CVBS                   360
++#define ACLK_JPEG_DECODER              361
++#define HCLK_JPEG_DECODER              362
++#define ACLK_VO_L_ROOT                 375
++#define ACLK_VO_L_BIU                  376
++#define ACLK_MAC_VO                    377
++#define PCLK_MAC_VO                    378
++#define CLK_GMAC0_SRC                  379
++#define CLK_GMAC0_RMII_50M             380
++#define CLK_GMAC0_TX                   381
++#define CLK_GMAC0_RX                   382
++#define ACLK_JPEG_ROOT                 385
++#define ACLK_JPEG_BIU                  386
++#define HCLK_SAI_I2S3                  387
++#define MCLK_SAI_I2S3                  388
++#define CLK_MACPHY                     398
++#define PCLK_VCDCPHY                   399
++#define PCLK_GPIO2                     404
++#define DBCLK_GPIO2                    405
++#define PCLK_VO_IOC                    406
++#define CCLK_SRC_SDMMC0                407
++#define HCLK_SDMMC0                    408
++#define PCLK_OTPC_NS                   411
++#define CLK_SBPI_OTPC_NS               412
++#define CLK_USER_OTPC_NS               413
++#define CLK_HDMIHDP0                   415
++#define HCLK_USBHOST                   416
++#define HCLK_USBHOST_ARB               417
++#define CLK_USBHOST_OHCI               418
++#define CLK_USBHOST_UTMI               419
++#define PCLK_UART4                     420
++#define PCLK_I2C4                      422
++#define CLK_I2C4                       423
++#define PCLK_I2C7                      424
++#define CLK_I2C7                       425
++#define PCLK_USBPHY                    426
++#define CLK_REF_USBPHY                 427
++#define HCLK_RKVDEC_ROOT               433
++#define ACLK_RKVDEC_ROOT_NDFT          434
++#define PCLK_DDRPHY_CRU                435
++#define HCLK_RKVDEC_BIU                436
++#define ACLK_RKVDEC_BIU                437
++#define ACLK_RKVDEC                    439
++#define HCLK_RKVDEC                    440
++#define CLK_HEVC_CA_RKVDEC             441
++#define ACLK_RKVDEC_PVTMUX_ROOT        442
++#define CLK_RKVDEC_PVTPLL_SRC          443
++#define PCLK_DDR_ROOT                  449
++#define PCLK_DDR_BIU                   450
++#define PCLK_DDRC                      451
++#define PCLK_DDRMON                    452
++#define CLK_TIMER_DDRMON               453
++#define PCLK_MSCH_BIU                  454
++#define PCLK_DDR_GRF                   455
++#define PCLK_DDR_HWLP                  456
++#define PCLK_DDRPHY                    457
++#define CLK_MSCH_BIU                   463
++#define ACLK_DDR_UPCTL                 464
++#define CLK_DDR_UPCTL                  465
++#define CLK_DDRMON                     466
++#define ACLK_DDR_SCRAMBLE              467
++#define ACLK_SPLIT                     468
++#define CLK_DDRC_SRC                   470
++#define CLK_DDR_PHY                    471
++#define PCLK_OTPC_S                    472
++#define CLK_SBPI_OTPC_S                473
++#define CLK_USER_OTPC_S                474
++#define PCLK_KEYREADER                 475
++#define PCLK_BUS_SGRF                  476
++#define PCLK_STIMER                    477
++#define CLK_STIMER0                    478
++#define CLK_STIMER1                    479
++#define PCLK_WDT_S                     480
++#define TCLK_WDT_S                     481
++#define HCLK_TRNG_S                    482
++#define HCLK_BOOTROM                   486
++#define PCLK_DCF                       487
++#define ACLK_SYSMEM                    488
++#define HCLK_TSP                       489
++#define ACLK_TSP                       490
++#define CLK_CORE_TSP                   491
++#define CLK_OTPC_ARB                   492
++#define PCLK_OTP_MASK                  493
++#define CLK_PMC_OTP                    494
++#define PCLK_PMU_ROOT                  495
++#define HCLK_PMU_ROOT                  496
++#define PCLK_I2C2                      497
++#define CLK_I2C2                       498
++#define HCLK_PMU_BIU                   500
++#define PCLK_PMU_BIU                   501
++#define FCLK_MCU                       502
++#define RTC_CLK_MCU                    504
++#define PCLK_OSCCHK                    505
++#define CLK_PMU_MCU_JTAG               506
++#define PCLK_PMU                       508
++#define PCLK_GPIO0                     509
++#define DBCLK_GPIO0                    510
++#define XIN_OSC0_DIV                   511
++#define CLK_DEEPSLOW                   512
++#define CLK_DDR_FAIL_SAFE              513
++#define PCLK_PMU_HP_TIMER              514
++#define CLK_PMU_HP_TIMER               515
++#define CLK_PMU_32K_HP_TIMER           516
++#define PCLK_PMU_IOC                   517
++#define PCLK_PMU_CRU                   518
++#define PCLK_PMU_GRF                   519
++#define PCLK_PMU_WDT                   520
++#define TCLK_PMU_WDT                   521
++#define PCLK_PMU_MAILBOX               522
++#define PCLK_SCRKEYGEN                 524
++#define CLK_SCRKEYGEN                  525
++#define CLK_PVTM_OSCCHK                526
++#define CLK_REFOUT                     530
++#define CLK_PVTM_PMU                   532
++#define PCLK_PVTM_PMU                  533
++#define PCLK_PMU_SGRF                  534
++#define HCLK_PMU_SRAM                  535
++#define CLK_UART0                      536
++#define CLK_UART1                      537
++#define CLK_UART2                      538
++#define CLK_UART3                      539
++#define CLK_UART4                      540
++#define CLK_UART5                      541
++#define CLK_UART6                      542
++#define CLK_UART7                      543
++#define MCLK_I2S0_2CH_SAI_SRC_PRE      544
++#define MCLK_I2S1_8CH_SAI_SRC_PRE      545
++#define MCLK_I2S2_2CH_SAI_SRC_PRE      546
++#define MCLK_I2S3_8CH_SAI_SRC_PRE      547
++#define MCLK_SDPDIF_SRC_PRE            548
++#define CLK_NR_CLKS                    (MCLK_SDPDIF_SRC_PRE + 1)
++
++/* grf-clocks indices */
++#define SCLK_SDMMC_DRV                 1
++#define SCLK_SDMMC_SAMPLE              2
++#define SCLK_SDIO0_DRV                 3
++#define SCLK_SDIO0_SAMPLE              4
++#define SCLK_SDIO1_DRV                 5
++#define SCLK_SDIO1_SAMPLE              6
++#define CLK_NR_GRF_CLKS                (SCLK_SDIO1_SAMPLE + 1)
++
++/* scmi-clocks indices */
++#define SCMI_PCLK_KEYREADER            0
++#define SCMI_HCLK_KLAD                 1
++#define SCMI_PCLK_KLAD                 2
++#define SCMI_HCLK_TRNG_S               3
++#define SCMI_HCLK_CRYPTO_S             4
++#define SCMI_PCLK_WDT_S                5
++#define SCMI_TCLK_WDT_S                6
++#define SCMI_PCLK_STIMER               7
++#define SCMI_CLK_STIMER0               8
++#define SCMI_CLK_STIMER1               9
++#define SCMI_PCLK_OTP_MASK             10
++#define SCMI_PCLK_OTPC_S               11
++#define SCMI_CLK_SBPI_OTPC_S           12
++#define SCMI_CLK_USER_OTPC_S           13
++#define SCMI_CLK_PMC_OTP               14
++#define SCMI_CLK_OTPC_ARB              15
++#define SCMI_CLK_CORE_TSP              16
++#define SCMI_ACLK_TSP                  17
++#define SCMI_HCLK_TSP                  18
++#define SCMI_PCLK_DCF                  19
++#define SCMI_CLK_DDR                   20
++#define SCMI_CLK_CPU                   21
++#define SCMI_CLK_GPU                   22
++#define SCMI_CORE_CRYPTO               23
++#define SCMI_ACLK_CRYPTO               24
++#define SCMI_PKA_CRYPTO                25
++#define SCMI_HCLK_CRYPTO               26
++#define SCMI_CORE_CRYPTO_S             27
++#define SCMI_ACLK_CRYPTO_S             28
++#define SCMI_PKA_CRYPTO_S              29
++#define SCMI_CORE_KLAD                 30
++#define SCMI_ACLK_KLAD                 31
++#define SCMI_HCLK_TRNG                 32
++
++// CRU_SOFTRST_CON03(Offset:0xA0C)
++#define SRST_NCOREPORESET0             0x00000030
++#define SRST_NCOREPORESET1             0x00000031
++#define SRST_NCOREPORESET2             0x00000032
++#define SRST_NCOREPORESET3             0x00000033
++#define SRST_NCORESET0                 0x00000034
++#define SRST_NCORESET1                 0x00000035
++#define SRST_NCORESET2                 0x00000036
++#define SRST_NCORESET3                 0x00000037
++#define SRST_NL2RESET                  0x00000038
++#define SRST_ARESETN_M_CORE_BIU        0x00000039
++#define SRST_RESETN_CORE_CRYPTO        0x0000003A
++
++// CRU_SOFTRST_CON05(Offset:0xA14)
++#define SRST_PRESETN_DBG               0x0000005D
++#define SRST_POTRESETN_DBG             0x0000005E
++#define SRST_NTRESETN_DBG              0x0000005F
++
++// CRU_SOFTRST_CON06(Offset:0xA18)
++#define SRST_PRESETN_CORE_GRF          0x00000062
++#define SRST_PRESETN_DAPLITE_BIU       0x00000063
++#define SRST_PRESETN_CPU_BIU           0x00000064
++#define SRST_RESETN_REF_PVTPLL_CORE    0x00000067
++
++// CRU_SOFTRST_CON08(Offset:0xA20)
++#define SRST_ARESETN_BUS_VOPGL_BIU     0x00000081
++#define SRST_ARESETN_BUS_H_BIU         0x00000083
++#define SRST_ARESETN_SYSMEM_BIU        0x00000088
++#define SRST_ARESETN_BUS_BIU           0x0000008A
++#define SRST_HRESETN_BUS_BIU           0x0000008B
++#define SRST_PRESETN_BUS_BIU           0x0000008C
++#define SRST_PRESETN_DFT2APB           0x0000008D
++#define SRST_PRESETN_BUS_GRF           0x0000008F
++
++// CRU_SOFTRST_CON09(Offset:0xA24)
++#define SRST_ARESETN_BUS_M_BIU         0x00000090
++#define SRST_ARESETN_GIC               0x00000091
++#define SRST_ARESETN_SPINLOCK          0x00000092
++#define SRST_ARESETN_DMAC              0x00000094
++#define SRST_PRESETN_TIMER             0x00000095
++#define SRST_RESETN_TIMER0             0x00000096
++#define SRST_RESETN_TIMER1             0x00000097
++#define SRST_RESETN_TIMER2             0x00000098
++#define SRST_RESETN_TIMER3             0x00000099
++#define SRST_RESETN_TIMER4             0x0000009A
++#define SRST_RESETN_TIMER5             0x0000009B
++#define SRST_PRESETN_JDBCK_DAP         0x0000009C
++#define SRST_RESETN_JDBCK_DAP          0x0000009D
++#define SRST_PRESETN_WDT_NS            0x0000009F
++
++// CRU_SOFTRST_CON10(Offset:0xA28)
++#define SRST_TRESETN_WDT_NS            0x000000A0
++#define SRST_HRESETN_TRNG_NS           0x000000A3
++#define SRST_PRESETN_UART0             0x000000A7
++#define SRST_SRESETN_UART0             0x000000A8
++#define SRST_RESETN_PKA_CRYPTO         0x000000AA
++#define SRST_ARESETN_CRYPTO            0x000000AB
++#define SRST_HRESETN_CRYPTO            0x000000AC
++#define SRST_PRESETN_DMA2DDR           0x000000AD
++#define SRST_ARESETN_DMA2DDR           0x000000AE
++
++// CRU_SOFTRST_CON11(Offset:0xA2C)
++#define SRST_PRESETN_PWM0              0x000000B4
++#define SRST_RESETN_PWM0               0x000000B5
++#define SRST_PRESETN_PWM1              0x000000B7
++#define SRST_RESETN_PWM1               0x000000B8
++#define SRST_PRESETN_SCR               0x000000BA
++#define SRST_ARESETN_DCF               0x000000BB
++#define SRST_PRESETN_INTMUX            0x000000BC
++
++// CRU_SOFTRST_CON25(Offset:0xA64)
++#define SRST_ARESETN_VPU_BIU           0x00000196
++#define SRST_HRESETN_VPU_BIU           0x00000197
++#define SRST_PRESETN_VPU_BIU           0x00000198
++#define SRST_ARESETN_VPU               0x00000199
++#define SRST_HRESETN_VPU               0x0000019A
++#define SRST_PRESETN_CRU_PCIE          0x0000019B
++#define SRST_PRESETN_VPU_GRF           0x0000019C
++#define SRST_HRESETN_SFC               0x0000019D
++#define SRST_SRESETN_SFC               0x0000019E
++#define SRST_CRESETN_EMMC              0x0000019F
++
++// CRU_SOFTRST_CON26(Offset:0xA68)
++#define SRST_HRESETN_EMMC              0x000001A0
++#define SRST_ARESETN_EMMC              0x000001A1
++#define SRST_BRESETN_EMMC              0x000001A2
++#define SRST_TRESETN_EMMC              0x000001A3
++#define SRST_PRESETN_GPIO1             0x000001A4
++#define SRST_DBRESETN_GPIO1            0x000001A5
++#define SRST_ARESETN_VPU_L_BIU         0x000001A6
++#define SRST_PRESETN_VPU_IOC           0x000001A8
++#define SRST_HRESETN_SAI_I2S0          0x000001A9
++#define SRST_MRESETN_SAI_I2S0          0x000001AA
++#define SRST_HRESETN_SAI_I2S2          0x000001AB
++#define SRST_MRESETN_SAI_I2S2          0x000001AC
++#define SRST_PRESETN_ACODEC            0x000001AD
++
++// CRU_SOFTRST_CON27(Offset:0xA6C)
++#define SRST_PRESETN_GPIO3             0x000001B0
++#define SRST_DBRESETN_GPIO3            0x000001B1
++#define SRST_PRESETN_SPI1              0x000001B4
++#define SRST_RESETN_SPI1               0x000001B5
++#define SRST_PRESETN_UART2             0x000001B7
++#define SRST_SRESETN_UART2             0x000001B8
++#define SRST_PRESETN_UART5             0x000001B9
++#define SRST_SRESETN_UART5             0x000001BA
++#define SRST_PRESETN_UART6             0x000001BB
++#define SRST_SRESETN_UART6             0x000001BC
++#define SRST_PRESETN_UART7             0x000001BD
++#define SRST_SRESETN_UART7             0x000001BE
++#define SRST_PRESETN_I2C3              0x000001BF
++
++// CRU_SOFTRST_CON28(Offset:0xA70)
++#define SRST_RESETN_I2C3               0x000001C0
++#define SRST_PRESETN_I2C5              0x000001C1
++#define SRST_RESETN_I2C5               0x000001C2
++#define SRST_PRESETN_I2C6              0x000001C3
++#define SRST_RESETN_I2C6               0x000001C4
++#define SRST_ARESETN_MAC               0x000001C5
++
++// CRU_SOFTRST_CON30(Offset:0xA78)
++#define SRST_PRESETN_PCIE              0x000001E1
++#define SRST_RESETN_PCIE_PIPE_PHY      0x000001E2
++#define SRST_RESETN_PCIE_POWER_UP      0x000001E3
++#define SRST_PRESETN_PCIE_PHY          0x000001E6
++#define SRST_PRESETN_PIPE_GRF          0x000001E7
++
++// CRU_SOFTRST_CON32(Offset:0xA80)
++#define SRST_HRESETN_SDIO0             0x00000202
++#define SRST_HRESETN_SDIO1             0x00000204
++#define SRST_RESETN_TS_0               0x00000205
++#define SRST_RESETN_TS_1               0x00000206
++#define SRST_PRESETN_CAN2              0x00000207
++#define SRST_RESETN_CAN2               0x00000208
++#define SRST_PRESETN_CAN3              0x00000209
++#define SRST_RESETN_CAN3               0x0000020A
++#define SRST_PRESETN_SARADC            0x0000020B
++#define SRST_RESETN_SARADC             0x0000020C
++#define SRST_RESETN_SARADC_PHY         0x0000020D
++#define SRST_PRESETN_TSADC             0x0000020E
++#define SRST_RESETN_TSADC              0x0000020F
++
++// CRU_SOFTRST_CON33(Offset:0xA84)
++#define SRST_ARESETN_USB3OTG           0x00000211
++
++// CRU_SOFTRST_CON34(Offset:0xA88)
++#define SRST_ARESETN_GPU_BIU           0x00000223
++#define SRST_PRESETN_GPU_BIU           0x00000225
++#define SRST_ARESETN_GPU               0x00000228
++#define SRST_RESETN_REF_PVTPLL_GPU     0x00000229
++
++// CRU_SOFTRST_CON36(Offset:0xA90)
++#define SRST_HRESETN_RKVENC_BIU        0x00000243
++#define SRST_ARESETN_RKVENC_BIU        0x00000244
++#define SRST_PRESETN_RKVENC_BIU        0x00000245
++#define SRST_HRESETN_RKVENC            0x00000246
++#define SRST_ARESETN_RKVENC            0x00000247
++#define SRST_RESETN_CORE_RKVENC        0x00000248
++#define SRST_HRESETN_SAI_I2S1          0x00000249
++#define SRST_MRESETN_SAI_I2S1          0x0000024A
++#define SRST_PRESETN_I2C1              0x0000024B
++#define SRST_RESETN_I2C1               0x0000024C
++#define SRST_PRESETN_I2C0              0x0000024D
++#define SRST_RESETN_I2C0               0x0000024E
++
++// CRU_SOFTRST_CON37(Offset:0xA94)
++#define SRST_PRESETN_SPI0              0x00000252
++#define SRST_RESETN_SPI0               0x00000253
++#define SRST_PRESETN_GPIO4             0x00000258
++#define SRST_DBRESETN_GPIO4            0x00000259
++#define SRST_PRESETN_RKVENC_IOC        0x0000025A
++#define SRST_HRESETN_SPDIF             0x0000025E
++#define SRST_MRESETN_SPDIF             0x0000025F
++
++// CRU_SOFTRST_CON38(Offset:0xA98)
++#define SRST_HRESETN_PDM               0x00000260
++#define SRST_MRESETN_PDM               0x00000261
++#define SRST_PRESETN_UART1             0x00000262
++#define SRST_SRESETN_UART1             0x00000263
++#define SRST_PRESETN_UART3             0x00000264
++#define SRST_SRESETN_UART3             0x00000265
++#define SRST_PRESETN_RKVENC_GRF        0x00000266
++#define SRST_PRESETN_CAN0              0x00000267
++#define SRST_RESETN_CAN0               0x00000268
++#define SRST_PRESETN_CAN1              0x00000269
++#define SRST_RESETN_CAN1               0x0000026A
++
++// CRU_SOFTRST_CON39(Offset:0xA9C)
++#define SRST_ARESETN_VO_BIU            0x00000273
++#define SRST_HRESETN_VO_BIU            0x00000274
++#define SRST_PRESETN_VO_BIU            0x00000275
++#define SRST_HRESETN_RGA2E             0x00000277
++#define SRST_ARESETN_RGA2E             0x00000278
++#define SRST_RESETN_CORE_RGA2E         0x00000279
++#define SRST_HRESETN_VDPP              0x0000027A
++#define SRST_ARESETN_VDPP              0x0000027B
++#define SRST_RESETN_CORE_VDPP          0x0000027C
++#define SRST_PRESETN_VO_GRF            0x0000027D
++#define SRST_PRESETN_CRU               0x0000027F
++
++// CRU_SOFTRST_CON40(Offset:0xAA0)
++#define SRST_ARESETN_VOP_BIU           0x00000281
++#define SRST_HRESETN_VOP               0x00000282
++#define SRST_DRESETN_VOP0              0x00000283
++#define SRST_DRESETN_VOP1              0x00000284
++#define SRST_ARESETN_VOP               0x00000285
++#define SRST_PRESETN_HDMI              0x00000286
++#define SRST_HDMI_RESETN               0x00000287
++#define SRST_PRESETN_HDMIPHY           0x0000028E
++#define SRST_HRESETN_HDCP_KEY          0x0000028F
++
++// CRU_SOFTRST_CON41(Offset:0xAA4)
++#define SRST_ARESETN_HDCP              0x00000290
++#define SRST_HRESETN_HDCP              0x00000291
++#define SRST_PRESETN_HDCP              0x00000292
++#define SRST_HRESETN_CVBS              0x00000293
++#define SRST_DRESETN_CVBS_VOP          0x00000294
++#define SRST_DRESETN_4X_CVBS_VOP       0x00000295
++#define SRST_ARESETN_JPEG_DECODER      0x00000296
++#define SRST_HRESETN_JPEG_DECODER      0x00000297
++#define SRST_ARESETN_VO_L_BIU          0x00000299
++#define SRST_ARESETN_MAC_VO            0x0000029A
++
++// CRU_SOFTRST_CON42(Offset:0xAA8)
++#define SRST_ARESETN_JPEG_BIU          0x000002A0
++#define SRST_HRESETN_SAI_I2S3          0x000002A1
++#define SRST_MRESETN_SAI_I2S3          0x000002A2
++#define SRST_RESETN_MACPHY             0x000002A3
++#define SRST_PRESETN_VCDCPHY           0x000002A4
++#define SRST_PRESETN_GPIO2             0x000002A5
++#define SRST_DBRESETN_GPIO2            0x000002A6
++#define SRST_PRESETN_VO_IOC            0x000002A7
++#define SRST_HRESETN_SDMMC0            0x000002A9
++#define SRST_PRESETN_OTPC_NS           0x000002AB
++#define SRST_RESETN_SBPI_OTPC_NS       0x000002AC
++#define SRST_RESETN_USER_OTPC_NS       0x000002AD
++
++// CRU_SOFTRST_CON43(Offset:0xAAC)
++#define SRST_RESETN_HDMIHDP0           0x000002B2
++#define SRST_HRESETN_USBHOST           0x000002B3
++#define SRST_HRESETN_USBHOST_ARB       0x000002B4
++#define SRST_RESETN_HOST_UTMI          0x000002B6
++#define SRST_PRESETN_UART4             0x000002B7
++#define SRST_SRESETN_UART4             0x000002B8
++#define SRST_PRESETN_I2C4              0x000002B9
++#define SRST_RESETN_I2C4               0x000002BA
++#define SRST_PRESETN_I2C7              0x000002BB
++#define SRST_RESETN_I2C7               0x000002BC
++#define SRST_PRESETN_USBPHY            0x000002BD
++#define SRST_RESETN_USBPHY_POR         0x000002BE
++#define SRST_RESETN_USBPHY_OTG         0x000002BF
++
++// CRU_SOFTRST_CON44(Offset:0xAB0)
++#define SRST_RESETN_USBPHY_HOST        0x000002C0
++#define SRST_PRESETN_DDRPHY_CRU        0x000002C4
++#define SRST_HRESETN_RKVDEC_BIU        0x000002C6
++#define SRST_ARESETN_RKVDEC_BIU        0x000002C7
++#define SRST_ARESETN_RKVDEC            0x000002C8
++#define SRST_HRESETN_RKVDEC            0x000002C9
++#define SRST_RESETN_HEVC_CA_RKVDEC     0x000002CB
++#define SRST_RESETN_REF_PVTPLL_RKVDEC  0x000002CC
++
++// CRU_SOFTRST_CON45(Offset:0xAB4)
++#define SRST_PRESETN_DDR_BIU           0x000002D1
++#define SRST_PRESETN_DDRC              0x000002D2
++#define SRST_PRESETN_DDRMON            0x000002D3
++#define SRST_RESETN_TIMER_DDRMON       0x000002D4
++#define SRST_PRESETN_MSCH_BIU          0x000002D5
++#define SRST_PRESETN_DDR_GRF           0x000002D6
++#define SRST_PRESETN_DDR_HWLP          0x000002D8
++#define SRST_PRESETN_DDRPHY            0x000002D9
++#define SRST_RESETN_MSCH_BIU           0x000002DA
++#define SRST_ARESETN_DDR_UPCTL         0x000002DB
++#define SRST_RESETN_DDR_UPCTL          0x000002DC
++#define SRST_RESETN_DDRMON             0x000002DD
++#define SRST_ARESETN_DDR_SCRAMBLE      0x000002DE
++#define SRST_ARESETN_SPLIT             0x000002DF
++
++// CRU_SOFTRST_CON46(Offset:0xAB8)
++#define SRST_RESETN_DDR_PHY            0x000002E0
++
++#endif
+diff --git a/include/dt-bindings/clock/rockchip,rk3576-cru.h b/include/dt-bindings/clock/rockchip,rk3576-cru.h
+index 25aed298a..f576e61be 100644
+--- a/include/dt-bindings/clock/rockchip,rk3576-cru.h
++++ b/include/dt-bindings/clock/rockchip,rk3576-cru.h
+@@ -589,4 +589,9 @@
+ #define PCLK_EDP_S			569
+ #define ACLK_KLAD			570
+ 
++/* SCMI clocks, use these when changing clocks through SCMI */
++#define SCMI_ARMCLK_L			10
++#define SCMI_ARMCLK_B			11
++#define SCMI_CLK_GPU			456
++
+ #endif
+diff --git a/include/dt-bindings/clock/rockchip-ddr.h b/include/dt-bindings/clock/rockchip-ddr.h
+new file mode 100644
+index 000000000..b065432e7
+--- /dev/null
++++ b/include/dt-bindings/clock/rockchip-ddr.h
+@@ -0,0 +1,63 @@
++/*
++ *
++ * Copyright (C) 2017 ROCKCHIP, Inc.
++ *
++ * This software is licensed under the terms of the GNU General Public
++ * License version 2, as published by the Free Software Foundation, and
++ * may be copied, distributed, and modified under those terms.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#ifndef _DT_BINDINGS_CLOCK_ROCKCHIP_DDR_H
++#define _DT_BINDINGS_CLOCK_ROCKCHIP_DDR_H
++
++#define DDR2_DEFAULT	(0)
++
++#define DDR3_800D	(0)	/* 5-5-5 */
++#define DDR3_800E	(1)	/* 6-6-6 */
++#define DDR3_1066E	(2)	/* 6-6-6 */
++#define DDR3_1066F	(3)	/* 7-7-7 */
++#define DDR3_1066G	(4)	/* 8-8-8 */
++#define DDR3_1333F	(5)	/* 7-7-7 */
++#define DDR3_1333G	(6)	/* 8-8-8 */
++#define DDR3_1333H	(7)	/* 9-9-9 */
++#define DDR3_1333J	(8)	/* 10-10-10 */
++#define DDR3_1600G	(9)	/* 8-8-8 */
++#define DDR3_1600H	(10)	/* 9-9-9 */
++#define DDR3_1600J	(11)	/* 10-10-10 */
++#define DDR3_1600K	(12)	/* 11-11-11 */
++#define DDR3_1866J	(13)	/* 10-10-10 */
++#define DDR3_1866K	(14)	/* 11-11-11 */
++#define DDR3_1866L	(15)	/* 12-12-12 */
++#define DDR3_1866M	(16)	/* 13-13-13 */
++#define DDR3_2133K	(17)	/* 11-11-11 */
++#define DDR3_2133L	(18)	/* 12-12-12 */
++#define DDR3_2133M	(19)	/* 13-13-13 */
++#define DDR3_2133N	(20)	/* 14-14-14 */
++#define DDR3_DEFAULT	(21)
++#define DDR_DDR2	(22)
++#define DDR_LPDDR	(23)
++#define DDR_LPDDR2	(24)
++
++#define DDR4_1600J	(0)	/* 10-10-10 */
++#define DDR4_1600K	(1)	/* 11-11-11 */
++#define DDR4_1600L	(2)	/* 12-12-12 */
++#define DDR4_1866L	(3)	/* 12-12-12 */
++#define DDR4_1866M	(4)	/* 13-13-13 */
++#define DDR4_1866N	(5)	/* 14-14-14 */
++#define DDR4_2133N	(6)	/* 14-14-14 */
++#define DDR4_2133P	(7)	/* 15-15-15 */
++#define DDR4_2133R	(8)	/* 16-16-16 */
++#define DDR4_2400P	(9)	/* 15-15-15 */
++#define DDR4_2400R	(10)	/* 16-16-16 */
++#define DDR4_2400U	(11)	/* 18-18-18 */
++#define DDR4_DEFAULT	(12)
++
++#define PAUSE_CPU_STACK_SIZE	16
++
++#endif
+diff --git a/include/dt-bindings/memory/rk3328-dram.h b/include/dt-bindings/memory/rk3328-dram.h
+new file mode 100644
+index 000000000..171f41c25
+--- /dev/null
++++ b/include/dt-bindings/memory/rk3328-dram.h
+@@ -0,0 +1,159 @@
++/*
++ * Copyright (c) 2017 Fuzhou Rockchip Electronics Co., Ltd
++ *
++ * This file is dual-licensed: you can use it either under the terms
++ * of the GPL or the X11 license, at your option. Note that this dual
++ * licensing only applies to this file, and not this project as a
++ * whole.
++ *
++ *  a) This library is free software; you can redistribute it and/or
++ *     modify it under the terms of the GNU General Public License as
++ *     published by the Free Software Foundation; either version 2 of the
++ *     License, or (at your option) any later version.
++ *
++ *     This library is distributed in the hope that it will be useful,
++ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *     GNU General Public License for more details.
++ *
++ * Or, alternatively,
++ *
++ *  b) Permission is hereby granted, free of charge, to any person
++ *     obtaining a copy of this software and associated documentation
++ *     files (the "Software"), to deal in the Software without
++ *     restriction, including without limitation the rights to use,
++ *     copy, modify, merge, publish, distribute, sublicense, and/or
++ *     sell copies of the Software, and to permit persons to whom the
++ *     Software is furnished to do so, subject to the following
++ *     conditions:
++ *
++ *     The above copyright notice and this permission notice shall be
++ *     included in all copies or substantial portions of the Software.
++ *
++ *     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ *     EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
++ *     OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
++ *     NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
++ *     HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
++ *     WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ *     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
++ *     OTHER DEALINGS IN THE SOFTWARE.
++ */
++#ifndef _DT_BINDINGS_DRAM_ROCKCHIP_RK3328_H
++#define _DT_BINDINGS_DRAM_ROCKCHIP_RK3328_H
++
++#define DDR3_DS_34ohm			(34)
++#define DDR3_DS_40ohm			(40)
++
++#define DDR3_ODT_DIS			(0)
++#define DDR3_ODT_40ohm			(40)
++#define DDR3_ODT_60ohm			(60)
++#define DDR3_ODT_120ohm			(120)
++
++#define LP2_DS_34ohm			(34)
++#define LP2_DS_40ohm			(40)
++#define LP2_DS_48ohm			(48)
++#define LP2_DS_60ohm			(60)
++#define LP2_DS_68_6ohm			(68)	/* optional */
++#define LP2_DS_80ohm			(80)
++#define LP2_DS_120ohm			(120)	/* optional */
++
++#define LP3_DS_34ohm			(34)
++#define LP3_DS_40ohm			(40)
++#define LP3_DS_48ohm			(48)
++#define LP3_DS_60ohm			(60)
++#define LP3_DS_80ohm			(80)
++#define LP3_DS_34D_40U			(3440)
++#define LP3_DS_40D_48U			(4048)
++#define LP3_DS_34D_48U			(3448)
++
++#define LP3_ODT_DIS			(0)
++#define LP3_ODT_60ohm			(60)
++#define LP3_ODT_120ohm			(120)
++#define LP3_ODT_240ohm			(240)
++
++#define LP4_PDDS_40ohm			(40)
++#define LP4_PDDS_48ohm			(48)
++#define LP4_PDDS_60ohm			(60)
++#define LP4_PDDS_80ohm			(80)
++#define LP4_PDDS_120ohm			(120)
++#define LP4_PDDS_240ohm			(240)
++
++#define LP4_DQ_ODT_40ohm		(40)
++#define LP4_DQ_ODT_48ohm		(48)
++#define LP4_DQ_ODT_60ohm		(60)
++#define LP4_DQ_ODT_80ohm		(80)
++#define LP4_DQ_ODT_120ohm		(120)
++#define LP4_DQ_ODT_240ohm		(240)
++#define LP4_DQ_ODT_DIS			(0)
++
++#define LP4_CA_ODT_40ohm		(40)
++#define LP4_CA_ODT_48ohm		(48)
++#define LP4_CA_ODT_60ohm		(60)
++#define LP4_CA_ODT_80ohm		(80)
++#define LP4_CA_ODT_120ohm		(120)
++#define LP4_CA_ODT_240ohm		(240)
++#define LP4_CA_ODT_DIS			(0)
++
++#define DDR4_DS_34ohm			(34)
++#define DDR4_DS_48ohm			(48)
++#define DDR4_RTT_NOM_DIS		(0)
++#define DDR4_RTT_NOM_60ohm		(60)
++#define DDR4_RTT_NOM_120ohm		(120)
++#define DDR4_RTT_NOM_40ohm		(40)
++#define DDR4_RTT_NOM_240ohm		(240)
++#define DDR4_RTT_NOM_48ohm		(48)
++#define DDR4_RTT_NOM_80ohm		(80)
++#define DDR4_RTT_NOM_34ohm		(34)
++
++#define PHY_DDR3_RON_RTT_DISABLE	(0)
++#define PHY_DDR3_RON_RTT_451ohm		(1)
++#define PHY_DDR3_RON_RTT_225ohm		(2)
++#define PHY_DDR3_RON_RTT_150ohm		(3)
++#define PHY_DDR3_RON_RTT_112ohm		(4)
++#define PHY_DDR3_RON_RTT_90ohm		(5)
++#define PHY_DDR3_RON_RTT_75ohm		(6)
++#define PHY_DDR3_RON_RTT_64ohm		(7)
++#define PHY_DDR3_RON_RTT_56ohm		(16)
++#define PHY_DDR3_RON_RTT_50ohm		(17)
++#define PHY_DDR3_RON_RTT_45ohm		(18)
++#define PHY_DDR3_RON_RTT_41ohm		(19)
++#define PHY_DDR3_RON_RTT_37ohm		(20)
++#define PHY_DDR3_RON_RTT_34ohm		(21)
++#define PHY_DDR3_RON_RTT_33ohm		(22)
++#define PHY_DDR3_RON_RTT_30ohm		(23)
++#define PHY_DDR3_RON_RTT_28ohm		(24)
++#define PHY_DDR3_RON_RTT_26ohm		(25)
++#define PHY_DDR3_RON_RTT_25ohm		(26)
++#define PHY_DDR3_RON_RTT_23ohm		(27)
++#define PHY_DDR3_RON_RTT_22ohm		(28)
++#define PHY_DDR3_RON_RTT_21ohm		(29)
++#define PHY_DDR3_RON_RTT_20ohm		(30)
++#define PHY_DDR3_RON_RTT_19ohm		(31)
++
++#define PHY_DDR4_LPDDR3_RON_RTT_DISABLE (0)
++#define PHY_DDR4_LPDDR3_RON_RTT_480ohm	(1)
++#define PHY_DDR4_LPDDR3_RON_RTT_240ohm	(2)
++#define PHY_DDR4_LPDDR3_RON_RTT_160ohm	(3)
++#define PHY_DDR4_LPDDR3_RON_RTT_120ohm	(4)
++#define PHY_DDR4_LPDDR3_RON_RTT_96ohm	(5)
++#define PHY_DDR4_LPDDR3_RON_RTT_80ohm	(6)
++#define PHY_DDR4_LPDDR3_RON_RTT_68ohm	(7)
++#define PHY_DDR4_LPDDR3_RON_RTT_60ohm	(16)
++#define PHY_DDR4_LPDDR3_RON_RTT_53ohm	(17)
++#define PHY_DDR4_LPDDR3_RON_RTT_48ohm	(18)
++#define PHY_DDR4_LPDDR3_RON_RTT_43ohm	(19)
++#define PHY_DDR4_LPDDR3_RON_RTT_40ohm	(20)
++#define PHY_DDR4_LPDDR3_RON_RTT_37ohm	(21)
++#define PHY_DDR4_LPDDR3_RON_RTT_34ohm	(22)
++#define PHY_DDR4_LPDDR3_RON_RTT_32ohm	(23)
++#define PHY_DDR4_LPDDR3_RON_RTT_30ohm	(24)
++#define PHY_DDR4_LPDDR3_RON_RTT_28ohm	(25)
++#define PHY_DDR4_LPDDR3_RON_RTT_26ohm	(26)
++#define PHY_DDR4_LPDDR3_RON_RTT_25ohm	(27)
++#define PHY_DDR4_LPDDR3_RON_RTT_24ohm	(28)
++#define PHY_DDR4_LPDDR3_RON_RTT_22ohm	(29)
++#define PHY_DDR4_LPDDR3_RON_RTT_21ohm	(30)
++#define PHY_DDR4_LPDDR3_RON_RTT_20ohm	(31)
++
++#endif /*_DT_BINDINGS_DRAM_ROCKCHIP_RK3328_H*/
+diff --git a/include/dt-bindings/power/rk3528-power.h b/include/dt-bindings/power/rk3528-power.h
+new file mode 100644
+index 000000000..a9963a177
+--- /dev/null
++++ b/include/dt-bindings/power/rk3528-power.h
+@@ -0,0 +1,18 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __DT_BINDINGS_POWER_RK3528_POWER_H__
++#define __DT_BINDINGS_POWER_RK3528_POWER_H__
++
++/**
++ * RK3528 idle id Summary.
++ */
++#define RK3528_PD_PMU		0
++#define RK3528_PD_BUS		1
++#define RK3528_PD_DDR		2
++#define RK3528_PD_MSCH		3
++#define RK3528_PD_GPU		4
++#define RK3528_PD_RKVDEC	5
++#define RK3528_PD_RKVENC	6
++#define RK3528_PD_VO		7
++#define RK3528_PD_VPU		8
++
++#endif
+diff --git a/include/linux/compiler.h b/include/linux/compiler.h
+index d18542d7e..cab387690 100644
+--- a/include/linux/compiler.h
++++ b/include/linux/compiler.h
+@@ -292,6 +292,28 @@ static inline void *offset_to_ptr(const int *off)
+  */
+ #define statically_true(x) (__builtin_constant_p(x) && (x))
+ 
++/*
++ * Similar to statically_true() but produces a constant expression
++ *
++ * To be used in conjunction with macros, such as BUILD_BUG_ON_ZERO(),
++ * which require their input to be a constant expression and for which
++ * statically_true() would otherwise fail.
++ *
++ * This is a trade-off: const_true() requires all its operands to be
++ * compile time constants. Else, it would always returns false even on
++ * the most trivial cases like:
++ *
++ *   true || non_const_var
++ *
++ * On the opposite, statically_true() is able to fold more complex
++ * tautologies and will return true on expressions such as:
++ *
++ *   !(non_const_var * 8 % 4)
++ *
++ * For the general case, statically_true() is better.
++ */
++#define const_true(x) __builtin_choose_expr(__is_constexpr(x), x, false)
++
+ /*
+  * This is needed in functions which generate the stack canary, see
+  * arch/x86/kernel/smpboot.c::start_secondary() for an example.
+diff --git a/include/linux/compiler.h.orig b/include/linux/compiler.h.orig
+new file mode 100644
+index 000000000..d18542d7e
+--- /dev/null
++++ b/include/linux/compiler.h.orig
+@@ -0,0 +1,303 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __LINUX_COMPILER_H
++#define __LINUX_COMPILER_H
++
++#include <linux/compiler_types.h>
++
++#ifndef __ASSEMBLY__
++
++#ifdef __KERNEL__
++
++/*
++ * Note: DISABLE_BRANCH_PROFILING can be used by special lowlevel code
++ * to disable branch tracing on a per file basis.
++ */
++void ftrace_likely_update(struct ftrace_likely_data *f, int val,
++			  int expect, int is_constant);
++#if defined(CONFIG_TRACE_BRANCH_PROFILING) \
++    && !defined(DISABLE_BRANCH_PROFILING) && !defined(__CHECKER__)
++#define likely_notrace(x)	__builtin_expect(!!(x), 1)
++#define unlikely_notrace(x)	__builtin_expect(!!(x), 0)
++
++#define __branch_check__(x, expect, is_constant) ({			\
++			long ______r;					\
++			static struct ftrace_likely_data		\
++				__aligned(4)				\
++				__section("_ftrace_annotated_branch")	\
++				______f = {				\
++				.data.func = __func__,			\
++				.data.file = __FILE__,			\
++				.data.line = __LINE__,			\
++			};						\
++			______r = __builtin_expect(!!(x), expect);	\
++			ftrace_likely_update(&______f, ______r,		\
++					     expect, is_constant);	\
++			______r;					\
++		})
++
++/*
++ * Using __builtin_constant_p(x) to ignore cases where the return
++ * value is always the same.  This idea is taken from a similar patch
++ * written by Daniel Walker.
++ */
++# ifndef likely
++#  define likely(x)	(__branch_check__(x, 1, __builtin_constant_p(x)))
++# endif
++# ifndef unlikely
++#  define unlikely(x)	(__branch_check__(x, 0, __builtin_constant_p(x)))
++# endif
++
++#ifdef CONFIG_PROFILE_ALL_BRANCHES
++/*
++ * "Define 'is'", Bill Clinton
++ * "Define 'if'", Steven Rostedt
++ */
++#define if(cond, ...) if ( __trace_if_var( !!(cond , ## __VA_ARGS__) ) )
++
++#define __trace_if_var(cond) (__builtin_constant_p(cond) ? (cond) : __trace_if_value(cond))
++
++#define __trace_if_value(cond) ({			\
++	static struct ftrace_branch_data		\
++		__aligned(4)				\
++		__section("_ftrace_branch")		\
++		__if_trace = {				\
++			.func = __func__,		\
++			.file = __FILE__,		\
++			.line = __LINE__,		\
++		};					\
++	(cond) ?					\
++		(__if_trace.miss_hit[1]++,1) :		\
++		(__if_trace.miss_hit[0]++,0);		\
++})
++
++#endif /* CONFIG_PROFILE_ALL_BRANCHES */
++
++#else
++# define likely(x)	__builtin_expect(!!(x), 1)
++# define unlikely(x)	__builtin_expect(!!(x), 0)
++# define likely_notrace(x)	likely(x)
++# define unlikely_notrace(x)	unlikely(x)
++#endif
++
++/* Optimization barrier */
++#ifndef barrier
++/* The "volatile" is due to gcc bugs */
++# define barrier() __asm__ __volatile__("": : :"memory")
++#endif
++
++#ifndef barrier_data
++/*
++ * This version is i.e. to prevent dead stores elimination on @ptr
++ * where gcc and llvm may behave differently when otherwise using
++ * normal barrier(): while gcc behavior gets along with a normal
++ * barrier(), llvm needs an explicit input variable to be assumed
++ * clobbered. The issue is as follows: while the inline asm might
++ * access any memory it wants, the compiler could have fit all of
++ * @ptr into memory registers instead, and since @ptr never escaped
++ * from that, it proved that the inline asm wasn't touching any of
++ * it. This version works well with both compilers, i.e. we're telling
++ * the compiler that the inline asm absolutely may see the contents
++ * of @ptr. See also: https://llvm.org/bugs/show_bug.cgi?id=15495
++ */
++# define barrier_data(ptr) __asm__ __volatile__("": :"r"(ptr) :"memory")
++#endif
++
++/* workaround for GCC PR82365 if needed */
++#ifndef barrier_before_unreachable
++# define barrier_before_unreachable() do { } while (0)
++#endif
++
++/* Unreachable code */
++#ifdef CONFIG_OBJTOOL
++/* Annotate a C jump table to allow objtool to follow the code flow */
++#define __annotate_jump_table __section(".data.rel.ro.c_jump_table")
++#else /* !CONFIG_OBJTOOL */
++#define __annotate_jump_table
++#endif /* CONFIG_OBJTOOL */
++
++/*
++ * Mark a position in code as unreachable.  This can be used to
++ * suppress control flow warnings after asm blocks that transfer
++ * control elsewhere.
++ */
++#define unreachable() do {		\
++	barrier_before_unreachable();	\
++	__builtin_unreachable();	\
++} while (0)
++
++/*
++ * KENTRY - kernel entry point
++ * This can be used to annotate symbols (functions or data) that are used
++ * without their linker symbol being referenced explicitly. For example,
++ * interrupt vector handlers, or functions in the kernel image that are found
++ * programatically.
++ *
++ * Not required for symbols exported with EXPORT_SYMBOL, or initcalls. Those
++ * are handled in their own way (with KEEP() in linker scripts).
++ *
++ * KENTRY can be avoided if the symbols in question are marked as KEEP() in the
++ * linker script. For example an architecture could KEEP() its entire
++ * boot/exception vector code rather than annotate each function and data.
++ */
++#ifndef KENTRY
++# define KENTRY(sym)						\
++	extern typeof(sym) sym;					\
++	static const unsigned long __kentry_##sym		\
++	__used							\
++	__attribute__((__section__("___kentry+" #sym)))		\
++	= (unsigned long)&sym;
++#endif
++
++#ifndef RELOC_HIDE
++# define RELOC_HIDE(ptr, off)					\
++  ({ unsigned long __ptr;					\
++     __ptr = (unsigned long) (ptr);				\
++    (typeof(ptr)) (__ptr + (off)); })
++#endif
++
++#define absolute_pointer(val)	RELOC_HIDE((void *)(val), 0)
++
++#ifndef OPTIMIZER_HIDE_VAR
++/* Make the optimizer believe the variable can be manipulated arbitrarily. */
++#define OPTIMIZER_HIDE_VAR(var)						\
++	__asm__ ("" : "=r" (var) : "0" (var))
++#endif
++
++#define __UNIQUE_ID(prefix) __PASTE(__PASTE(__UNIQUE_ID_, prefix), __COUNTER__)
++
++/**
++ * data_race - mark an expression as containing intentional data races
++ *
++ * This data_race() macro is useful for situations in which data races
++ * should be forgiven.  One example is diagnostic code that accesses
++ * shared variables but is not a part of the core synchronization design.
++ * For example, if accesses to a given variable are protected by a lock,
++ * except for diagnostic code, then the accesses under the lock should
++ * be plain C-language accesses and those in the diagnostic code should
++ * use data_race().  This way, KCSAN will complain if buggy lockless
++ * accesses to that variable are introduced, even if the buggy accesses
++ * are protected by READ_ONCE() or WRITE_ONCE().
++ *
++ * This macro *does not* affect normal code generation, but is a hint
++ * to tooling that data races here are to be ignored.  If the access must
++ * be atomic *and* KCSAN should ignore the access, use both data_race()
++ * and READ_ONCE(), for example, data_race(READ_ONCE(x)).
++ */
++#define data_race(expr)							\
++({									\
++	__kcsan_disable_current();					\
++	__auto_type __v = (expr);					\
++	__kcsan_enable_current();					\
++	__v;								\
++})
++
++#endif /* __KERNEL__ */
++
++/**
++ * offset_to_ptr - convert a relative memory offset to an absolute pointer
++ * @off:	the address of the 32-bit offset value
++ */
++static inline void *offset_to_ptr(const int *off)
++{
++	return (void *)((unsigned long)off + *off);
++}
++
++#endif /* __ASSEMBLY__ */
++
++#ifdef CONFIG_64BIT
++#define ARCH_SEL(a,b) a
++#else
++#define ARCH_SEL(a,b) b
++#endif
++
++/*
++ * Force the compiler to emit 'sym' as a symbol, so that we can reference
++ * it from inline assembler. Necessary in case 'sym' could be inlined
++ * otherwise, or eliminated entirely due to lack of references that are
++ * visible to the compiler.
++ */
++#define ___ADDRESSABLE(sym, __attrs)						\
++	static void * __used __attrs						\
++	__UNIQUE_ID(__PASTE(__addressable_,sym)) = (void *)(uintptr_t)&sym;
++
++#define __ADDRESSABLE(sym) \
++	___ADDRESSABLE(sym, __section(".discard.addressable"))
++
++/* &a[0] degrades to a pointer: a different type from an array */
++#define __must_be_array(a)	BUILD_BUG_ON_ZERO(__same_type((a), &(a)[0]))
++
++/* Require C Strings (i.e. NUL-terminated) lack the "nonstring" attribute. */
++#define __must_be_cstr(p)	BUILD_BUG_ON_ZERO(__annotated(p, nonstring))
++
++/*
++ * This returns a constant expression while determining if an argument is
++ * a constant expression, most importantly without evaluating the argument.
++ * Glory to Martin Uecker <Martin.Uecker@med.uni-goettingen.de>
++ *
++ * Details:
++ * - sizeof() return an integer constant expression, and does not evaluate
++ *   the value of its operand; it only examines the type of its operand.
++ * - The results of comparing two integer constant expressions is also
++ *   an integer constant expression.
++ * - The first literal "8" isn't important. It could be any literal value.
++ * - The second literal "8" is to avoid warnings about unaligned pointers;
++ *   this could otherwise just be "1".
++ * - (long)(x) is used to avoid warnings about 64-bit types on 32-bit
++ *   architectures.
++ * - The C Standard defines "null pointer constant", "(void *)0", as
++ *   distinct from other void pointers.
++ * - If (x) is an integer constant expression, then the "* 0l" resolves
++ *   it into an integer constant expression of value 0. Since it is cast to
++ *   "void *", this makes the second operand a null pointer constant.
++ * - If (x) is not an integer constant expression, then the second operand
++ *   resolves to a void pointer (but not a null pointer constant: the value
++ *   is not an integer constant 0).
++ * - The conditional operator's third operand, "(int *)8", is an object
++ *   pointer (to type "int").
++ * - The behavior (including the return type) of the conditional operator
++ *   ("operand1 ? operand2 : operand3") depends on the kind of expressions
++ *   given for the second and third operands. This is the central mechanism
++ *   of the macro:
++ *   - When one operand is a null pointer constant (i.e. when x is an integer
++ *     constant expression) and the other is an object pointer (i.e. our
++ *     third operand), the conditional operator returns the type of the
++ *     object pointer operand (i.e. "int *"). Here, within the sizeof(), we
++ *     would then get:
++ *       sizeof(*((int *)(...))  == sizeof(int)  == 4
++ *   - When one operand is a void pointer (i.e. when x is not an integer
++ *     constant expression) and the other is an object pointer (i.e. our
++ *     third operand), the conditional operator returns a "void *" type.
++ *     Here, within the sizeof(), we would then get:
++ *       sizeof(*((void *)(...)) == sizeof(void) == 1
++ * - The equality comparison to "sizeof(int)" therefore depends on (x):
++ *     sizeof(int) == sizeof(int)     (x) was a constant expression
++ *     sizeof(int) != sizeof(void)    (x) was not a constant expression
++ */
++#define __is_constexpr(x) \
++	(sizeof(int) == sizeof(*(8 ? ((void *)((long)(x) * 0l)) : (int *)8)))
++
++/*
++ * Whether 'type' is a signed type or an unsigned type. Supports scalar types,
++ * bool and also pointer types.
++ */
++#define is_signed_type(type) (((type)(-1)) < (__force type)1)
++#define is_unsigned_type(type) (!is_signed_type(type))
++
++/*
++ * Useful shorthand for "is this condition known at compile-time?"
++ *
++ * Note that the condition may involve non-constant values,
++ * but the compiler may know enough about the details of the
++ * values to determine that the condition is statically true.
++ */
++#define statically_true(x) (__builtin_constant_p(x) && (x))
++
++/*
++ * This is needed in functions which generate the stack canary, see
++ * arch/x86/kernel/smpboot.c::start_secondary() for an example.
++ */
++#define prevent_tail_call_optimization()	mb()
++
++#include <asm/rwonce.h>
++
++#endif /* __LINUX_COMPILER_H */
+diff --git a/include/linux/hw_bitfield.h b/include/linux/hw_bitfield.h
+new file mode 100644
+index 000000000..df202e167
+--- /dev/null
++++ b/include/linux/hw_bitfield.h
+@@ -0,0 +1,62 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2025, Collabora Ltd.
++ */
++
++#ifndef _LINUX_HW_BITFIELD_H
++#define _LINUX_HW_BITFIELD_H
++
++#include <linux/bitfield.h>
++#include <linux/build_bug.h>
++#include <linux/limits.h>
++
++/**
++ * FIELD_PREP_WM16() - prepare a bitfield element with a mask in the upper half
++ * @_mask: shifted mask defining the field's length and position
++ * @_val:  value to put in the field
++ *
++ * FIELD_PREP_WM16() masks and shifts up the value, as well as bitwise ORs the
++ * result with the mask shifted up by 16.
++ *
++ * This is useful for a common design of hardware registers where the upper
++ * 16-bit half of a 32-bit register is used as a write-enable mask. In such a
++ * register, a bit in the lower half is only updated if the corresponding bit
++ * in the upper half is high.
++ */
++#define FIELD_PREP_WM16(_mask, _val)					     \
++	({								     \
++		typeof(_val) __val = _val;				     \
++		typeof(_mask) __mask = _mask;				     \
++		__BF_FIELD_CHECK(__mask, ((u16)0U), __val,		     \
++				 "HWORD_UPDATE: ");			     \
++		(((typeof(__mask))(__val) << __bf_shf(__mask)) & (__mask)) | \
++		((__mask) << 16);					     \
++	})
++
++/**
++ * FIELD_PREP_WM16_CONST() - prepare a constant bitfield element with a mask in
++ *                           the upper half
++ * @_mask: shifted mask defining the field's length and position
++ * @_val:  value to put in the field
++ *
++ * FIELD_PREP_WM16_CONST() masks and shifts up the value, as well as bitwise ORs
++ * the result with the mask shifted up by 16.
++ *
++ * This is useful for a common design of hardware registers where the upper
++ * 16-bit half of a 32-bit register is used as a write-enable mask. In such a
++ * register, a bit in the lower half is only updated if the corresponding bit
++ * in the upper half is high.
++ *
++ * Unlike FIELD_PREP_WM16(), this is a constant expression and can therefore
++ * be used in initializers. Error checking is less comfortable for this
++ * version.
++ */
++#define FIELD_PREP_WM16_CONST(_mask, _val)				 \
++	(								 \
++		FIELD_PREP_CONST(_mask, _val) |				 \
++		(BUILD_BUG_ON_ZERO(const_true((u64)(_mask) > U16_MAX)) + \
++		 ((_mask) << 16))					 \
++	)
++
++
++#endif /* _LINUX_HW_BITFIELD_H */
+diff --git a/include/linux/mfd/rockchip-mfpwm.h b/include/linux/mfd/rockchip-mfpwm.h
+new file mode 100644
+index 000000000..78d9c3396
+--- /dev/null
++++ b/include/linux/mfd/rockchip-mfpwm.h
+@@ -0,0 +1,454 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (c) 2025 Collabora Ltd.
++ *
++ * Common header file for all the Rockchip Multi-function PWM controller
++ * drivers that are spread across subsystems.
++ *
++ * Authors:
++ *     Nicolas Frattaroli <nicolas.frattaroli@collabora.com>
++ */
++
++#ifndef __SOC_ROCKCHIP_MFPWM_H__
++#define __SOC_ROCKCHIP_MFPWM_H__
++
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/hw_bitfield.h>
++#include <linux/io.h>
++#include <linux/spinlock.h>
++
++struct rockchip_mfpwm;
++
++/**
++ * struct rockchip_mfpwm_func - struct representing a single function driver
++ *
++ * @id: unique id for this function driver instance
++ * @base: pointer to start of MMIO registers
++ * @parent: a pointer to the parent mfpwm struct
++ * @irq: the shared IRQ gotten from the parent mfpwm device
++ * @core: a pointer to the clk mux that drives this channel's PWM
++ */
++struct rockchip_mfpwm_func {
++	int id;
++	void __iomem *base;
++	struct rockchip_mfpwm *parent;
++	int irq;
++	struct clk *core;
++};
++
++/*
++ * PWMV4 Register Definitions
++ * --------------------------
++ *
++ * Attributes:
++ *  RW  - Read-Write
++ *  RO  - Read-Only
++ *  WO  - Write-Only
++ *  W1T - Write high, Self-clearing
++ *  W1C - Write high to clear interrupt
++ *
++ * Bit ranges to be understood with Verilog-like semantics,
++ * e.g. [03:00] is 4 bits: 0, 1, 2 and 3.
++ *
++ * All registers must be accessed with 32-bit width accesses only
++ */
++
++#define PWMV4_REG_VERSION		0x000
++/*
++ * VERSION Register Description
++ * [31:24] RO  | Hardware Major Version
++ * [23:16] RO  | Hardware Minor Version
++ * [15:15] RO  | Reserved
++ * [14:14] RO  | Hardware supports biphasic counters
++ * [13:13] RO  | Hardware supports filters
++ * [12:12] RO  | Hardware supports waveform generation
++ * [11:11] RO  | Hardware supports counter
++ * [10:10] RO  | Hardware supports frequency metering
++ * [09:09] RO  | Hardware supports power key functionality
++ * [08:08] RO  | Hardware supports infrared transmissions
++ * [07:04] RO  | Channel index of this instance
++ * [03:00] RO  | Number of channels the base instance supports
++ */
++
++#define PWMV4_REG_ENABLE		0x004
++/*
++ * ENABLE Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:06] RO  | Reserved
++ * [05:05] RW  | PWM Channel Counter Read Enable, 1 = enabled
++ */
++#define PWMV4_CHN_CNT_RD_EN(v)		FIELD_PREP_WM16(BIT(5), (v))
++/*
++ * [04:04] W1T | PWM Globally Joined Control Enable
++ *               1 = this PWM channel will be enabled by a global pwm enable
++ *               bit instead of the PWM Enable bit.
++ */
++#define PWMV4_GLOBAL_CTRL_EN(v)		FIELD_PREP_WM16(BIT(4), (v))
++/*
++ * [03:03] RW  | Force Clock Enable
++ *               0 = disabled, if the PWM channel is inactive then so is the
++ *               clock prescale module
++ */
++#define PWMV4_FORCE_CLK_EN(v)		FIELD_PREP_WM16(BIT(3), (v))
++/*
++ * [02:02] W1T | PWM Control Update Enable
++ *               1 = enabled, commits modifications of _CTRL, _PERIOD, _DUTY and
++ *               _OFFSET registers once 1 is written to it
++ */
++#define PWMV4_CTRL_UPDATE_EN		FIELD_PREP_WM16_CONST(BIT(2), 1)
++/*
++ * [01:01] RW  | PWM Enable, 1 = enabled
++ *               If in one-shot mode, clears after end of operation
++ */
++#define PWMV4_EN_MASK			BIT(1)
++#define PWMV4_EN(v)			FIELD_PREP_WM16(PWMV4_EN_MASK, \
++							((v) ? 1 : 0))
++/*
++ * [00:00] RW  | PWM Clock Enable, 1 = enabled
++ *               If in one-shot mode, clears after end of operation
++ */
++#define PWMV4_CLK_EN_MASK		BIT(0)
++#define PWMV4_CLK_EN(v)			FIELD_PREP_WM16(PWMV4_CLK_EN_MASK, \
++							((v) ? 1 : 0))
++#define PWMV4_EN_BOTH_MASK		(PWMV4_EN_MASK | PWMV4_CLK_EN_MASK)
++static inline __pure bool rockchip_pwm_v4_is_enabled(unsigned int val)
++{
++	return (val & PWMV4_EN_BOTH_MASK);
++}
++
++#define PWMV4_REG_CLK_CTRL		0x008
++/*
++ * CLK_CTRL Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:15] RW  | Clock Global Selection
++ *               0 = current channel scale clock
++ *               1 = global channel scale clock
++ */
++#define PWMV4_CLK_GLOBAL(v)		FIELD_PREP_WM16(BIT(15), (v))
++/*
++ * [14:13] RW  | Clock Source Selection
++ *               0 = Clock from PLL, frequency can be configured
++ *               1 = Clock from crystal oscillator, frequency is fixed
++ *               2 = Clock from RC oscillator, frequency is fixed
++ *               3 = Reserved
++ *               NOTE: The purpose for this clock-mux-outside-CRU construct is
++ *                     to let the SoC go into a sleep state with the PWM
++ *                     hardware still having a clock signal for IR input, which
++ *                     can then wake up the SoC.
++ */
++#define PWMV4_CLK_SRC_PLL		0x0U
++#define PWMV4_CLK_SRC_CRYSTAL		0x1U
++#define PWMV4_CLK_SRC_RC		0x2U
++#define PWMV4_CLK_SRC_SHIFT		13
++#define PWMV4_CLK_SRC_WIDTH		2
++/*
++ * [12:04] RW  | Scale Factor to apply to pre-scaled clock
++ *               1 <= v <= 256, v means clock divided by 2*v
++ */
++#define PWMV4_CLK_SCALE_F(v)		FIELD_PREP_WM16(GENMASK(12, 4), (v))
++/*
++ * [03:03] RO  | Reserved
++ * [02:00] RW  | Prescale Factor
++ *               v here means the input clock is divided by pow(2, v)
++ */
++#define PWMV4_CLK_PRESCALE_F(v)		FIELD_PREP_WM16(GENMASK(2, 0), (v))
++
++#define PWMV4_REG_CTRL			0x00C
++/*
++ * CTRL Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:09] RO  | Reserved
++ * [08:06] RW  | PWM Input Channel Selection
++ *               By default, the channel selects its own input, but writing v
++ *               here selects PWM input from channel v instead.
++ */
++#define PWMV4_CTRL_IN_SEL(v)		FIELD_PREP_WM16(GENMASK(8, 6), (v))
++/* [05:05] RW  | Aligned Mode, 0 = Valid, 1 = Invalid */
++#define PWMV4_CTRL_UNALIGNED(v)		FIELD_PREP_WM16(BIT(5), (v))
++/* [04:04] RW  | Output Mode, 0 = Left Aligned, 1 = Centre Aligned */
++#define PWMV4_LEFT_ALIGNED		0x0U
++#define PWMV4_CENTRE_ALIGNED		0x1U
++#define PWMV4_CTRL_OUT_MODE(v)		FIELD_PREP_WM16(BIT(4), (v))
++/*
++ * [03:03] RW  | Inactive Polarity for when the channel is either disabled or
++ *               has completed outputting the entire waveform in one-shot mode.
++ *               0 = Negative, 1 = Positive
++ */
++#define PWMV4_POLARITY_N		0x0U
++#define PWMV4_POLARITY_P		0x1U
++#define PWMV4_INACTIVE_POL(v)		FIELD_PREP_WM16(BIT(3), (v))
++/*
++ * [02:02] RW  | Duty Cycle Polarity to use at the start of the waveform.
++ *               0 = Negative, 1 = Positive
++ */
++#define PWMV4_DUTY_POL_SHIFT		2
++#define PWMV4_DUTY_POL_MASK		BIT(PWMV4_DUTY_POL_SHIFT)
++#define PWMV4_DUTY_POL(v)		FIELD_PREP_WM16(PWMV4_DUTY_POL_MASK, \
++							(v))
++/*
++ * [01:00] RW  | PWM Mode
++ *               0 = One-shot mode, PWM generates waveform RPT times
++ *               1 = Continuous mode
++ *               2 = Capture mode, PWM measures cycles of input waveform
++ *               3 = Reserved
++ */
++#define PWMV4_MODE_ONESHOT		0x0U
++#define PWMV4_MODE_CONT			0x1U
++#define PWMV4_MODE_CAPTURE		0x2U
++#define PWMV4_MODE_MASK			GENMASK(1, 0)
++#define PWMV4_MODE(v)			FIELD_PREP_WM16(PWMV4_MODE_MASK, (v))
++#define PWMV4_CTRL_COM_FLAGS	(PWMV4_INACTIVE_POL(PWMV4_POLARITY_N) | \
++				 PWMV4_DUTY_POL(PWMV4_POLARITY_P) | \
++				 PWMV4_CTRL_OUT_MODE(PWMV4_LEFT_ALIGNED) | \
++				 PWMV4_CTRL_UNALIGNED(true))
++#define PWMV4_CTRL_CONT_FLAGS	(PWMV4_MODE(PWMV4_MODE_CONT) | \
++				 PWMV4_CTRL_COM_FLAGS)
++#define PWMV4_CTRL_CAP_FLAGS	(PWMV4_MODE(PWMV4_MODE_CAPTURE) | \
++				 PWMV4_CTRL_COM_FLAGS)
++
++#define PWMV4_REG_PERIOD		0x010
++/*
++ * PERIOD Register Description
++ * [31:00] RW  | Period of the output waveform
++ *               Constraints: should be even if CTRL_OUT_MODE is CENTRE_ALIGNED
++ */
++
++#define PWMV4_REG_DUTY			0x014
++/*
++ * DUTY Register Description
++ * [31:00] RW  | Duty cycle of the output waveform
++ *               Constraints: should be even if CTRL_OUT_MODE is CENTRE_ALIGNED
++ */
++
++#define PWMV4_REG_OFFSET		0x018
++/*
++ * OFFSET Register Description
++ * [31:00] RW  | Offset of the output waveform, based on the PWM clock
++ *               Constraints: 0 <= v <= (PERIOD - DUTY)
++ */
++
++#define PWMV4_REG_RPT			0x01C
++/*
++ * RPT Register Description
++ * [31:16] RW  | Second dimensional of the effective number of waveform
++ *               repetitions. Increases by one every first dimensional times.
++ *               Value `n` means `n + 1` repetitions. The final number of
++ *               repetitions of the waveform in one-shot mode is:
++ *               `(first_dimensional + 1) * (second_dimensional + 1)`
++ * [15:00] RW  | First dimensional of the effective number of waveform
++ *               repetitions. Value `n` means `n + 1` repetitions.
++ */
++
++#define PWMV4_REG_FILTER_CTRL		0x020
++/*
++ * FILTER_CTRL Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:10] RO  | Reserved
++ * [09:04] RW  | Filter window number
++ * [03:01] RO  | Reserved
++ * [00:00] RW  | Filter Enable, 0 = disabled, 1 = enabled
++ */
++
++#define PWMV4_REG_CNT			0x024
++/*
++ * CNT Register Description
++ * [31:00] RO  | Current value of the PWM Channel 0 counter in pwm clock cycles,
++ *               0 <= v <= 2^32-1
++ */
++
++#define PWMV4_REG_ENABLE_DELAY		0x028
++/*
++ * ENABLE_DELAY Register Description
++ * [31:16] RO  | Reserved
++ * [15:00] RW  | PWM enable delay, in an unknown unit but probably cycles
++ */
++
++#define PWMV4_REG_HPC			0x02C
++/*
++ * HPC Register Description
++ * [31:00] RW  | Number of effective high polarity cycles of the input waveform
++ *               in capture mode. Based on the PWM clock. 0 <= v <= 2^32-1
++ */
++
++#define PWMV4_REG_LPC			0x030
++/*
++ * LPC Register Description
++ * [31:00] RW  | Number of effective low polarity cycles of the input waveform
++ *               in capture mode. Based on the PWM clock. 0 <= v <= 2^32-1
++ */
++
++#define PWMV4_REG_BIPHASIC_CNT_CTRL0	0x040
++/*
++ * BIPHASIC_CNT_CTRL0 Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:10] RO  | Reserved
++ * [09:09] RW  | Biphasic Counter Phase Edge Selection for mode 0,
++ *               0 = rising edge (posedge), 1 = falling edge (negedge)
++ * [08:08] RW  | Biphasic Counter Clock force enable, 1 = force enable
++ * [07:07] W1T | Synchronous Enable
++ * [06:06] W1T | Mode Switch
++ *               0 = Normal Mode, 1 = Switch timer clock and measured clock
++ *               Constraints: "Biphasic Counter Mode" must be 0 if this is 1
++ * [05:03] RW  | Biphasic Counter Mode
++ *               0x0 = Mode 0, 0x1 = Mode 1, 0x2 = Mode 2, 0x3 = Mode 3,
++ *               0x4 = Mode 4, 0x5 = Reserved
++ * [02:02] RW  | Biphasic Counter Clock Selection
++ *               0 = clock is from PLL and frequency can be configured
++ *               1 = clock is from crystal oscillator and frequency is fixed
++ * [01:01] RW  | Biphasic Counter Continuous Mode
++ * [00:00] W1T | Biphasic Counter Enable
++ */
++
++#define PWMV4_REG_BIPHASIC_CNT_CTRL1	0x044
++/*
++ * BIPHASIC_CNT_CTRL1 Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:11] RO  | Reserved
++ * [10:04] RW  | Biphasic Counter Filter Window Number
++ * [03:01] RO  | Reserved
++ * [00:00] RW  | Biphasic Counter Filter Enable
++ */
++
++#define PWMV4_REG_BIPHASIC_CNT_TIMER	0x048
++/*
++ * BIPHASIC_CNT_TIMER Register Description
++ * [31:00] RW  | Biphasic Counter Timer Value, in number of biphasic counter
++ *               timer clock cycles
++ */
++
++#define PWMV4_REG_BIPHASIC_CNT_RES	0x04C
++/*
++ * BIPHASIC_CNT_RES Register Description
++ * [31:00] RO  | Biphasic Counter Result Value
++ *               Constraints: Can only be read after INTSTS[9] is asserted
++ */
++
++#define PWMV4_REG_BIPHASIC_CNT_RES_S	0x050
++/*
++ * BIPHASIC_CNT_RES_S Register Description
++ * [31:00] RO  | Biphasic Counter Result Value with synchronised processing
++ *               Can be read in real-time if BIPHASIC_CNT_CTRL0[7] was set to 1
++ */
++
++#define PWMV4_REG_INTSTS		0x070
++/*
++ * INTSTS Register Description
++ * [31:10] RO  | Reserved
++ * [09:09] W1C | Biphasic Counter Interrupt Status, 1 = interrupt asserted
++ * [08:08] W1C | Waveform Middle Interrupt Status, 1 = interrupt asserted
++ * [07:07] W1C | Waveform Max Interrupt Status, 1 = interrupt asserted
++ * [06:06] W1C | IR Transmission End Interrupt Status, 1 = interrupt asserted
++ * [05:05] W1C | Power Key Match Interrupt Status, 1 = interrupt asserted
++ * [04:04] W1C | Frequency Meter Interrupt Status, 1 = interrupt asserted
++ * [03:03] W1C | Reload Interrupt Status, 1 = interrupt asserted
++ * [02:02] W1C | Oneshot End Interrupt Status, 1 = interrupt asserted
++ * [01:01] W1C | HPC Capture Interrupt Status, 1 = interrupt asserted
++ * [00:00] W1C | LPC Capture Interrupt Status, 1 = interrupt asserted
++ */
++#define PWMV4_INT_LPC			BIT(0)
++#define PWMV4_INT_HPC			BIT(1)
++#define PWMV4_INT_LPC_W(v)		FIELD_PREP_WM16(PWMV4_INT_LPC, \
++							((v) ? 1 : 0))
++#define PWMV4_INT_HPC_W(v)		FIELD_PREP_WM16(PWMV4_INT_HPC, \
++							((v) ? 1 : 0))
++
++#define PWMV4_REG_INT_EN		0x074
++/*
++ * INT_EN Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:10] RO  | Reserved
++ * [09:09] RW  | Biphasic Counter Interrupt Enable, 1 = enabled
++ * [08:08] W1C | Waveform Middle Interrupt Enable, 1 = enabled
++ * [07:07] W1C | Waveform Max Interrupt Enable, 1 = enabled
++ * [06:06] W1C | IR Transmission End Interrupt Enable, 1 = enabled
++ * [05:05] W1C | Power Key Match Interrupt Enable, 1 = enabled
++ * [04:04] W1C | Frequency Meter Interrupt Enable, 1 = enabled
++ * [03:03] W1C | Reload Interrupt Enable, 1 = enabled
++ * [02:02] W1C | Oneshot End Interrupt Enable, 1 = enabled
++ * [01:01] W1C | HPC Capture Interrupt Enable, 1 = enabled
++ * [00:00] W1C | LPC Capture Interrupt Enable, 1 = enabled
++ */
++
++#define PWMV4_REG_INT_MASK		0x078
++/*
++ * INT_MASK Register Description
++ * [31:16] WO  | Write Enable Mask for the lower half of the register
++ *               Set bit `n` here to 1 if you wish to modify bit `n >> 16` in
++ *               the same write operation
++ * [15:10] RO  | Reserved
++ * [09:09] RW  | Biphasic Counter Interrupt Masked, 1 = masked
++ * [08:08] W1C | Waveform Middle Interrupt Masked, 1 = masked
++ * [07:07] W1C | Waveform Max Interrupt Masked, 1 = masked
++ * [06:06] W1C | IR Transmission End Interrupt Masked, 1 = masked
++ * [05:05] W1C | Power Key Match Interrupt Masked, 1 = masked
++ * [04:04] W1C | Frequency Meter Interrupt Masked, 1 = masked
++ * [03:03] W1C | Reload Interrupt Masked, 1 = masked
++ * [02:02] W1C | Oneshot End Interrupt Masked, 1 = masked
++ * [01:01] W1C | HPC Capture Interrupt Masked, 1 = masked
++ * [00:00] W1C | LPC Capture Interrupt Masked, 1 = masked
++ */
++
++static inline u32 mfpwm_reg_read(void __iomem *base, u32 reg)
++{
++	return readl(base + reg);
++}
++
++static inline void mfpwm_reg_write(void __iomem *base, u32 reg, u32 val)
++{
++	writel(val, base + reg);
++}
++
++/**
++ * mfpwm_acquire - try becoming the active mfpwm function device
++ * @pwmf: pointer to the calling driver instance's &struct rockchip_mfpwm_func
++ *
++ * mfpwm device "function" drivers must call this function before doing anything
++ * that either modifies or relies on the parent device's state, such as clocks,
++ * enabling/disabling outputs, modifying shared regs etc.
++ *
++ * The return statues should always be checked.
++ *
++ * All mfpwm_acquire() calls must be balanced with corresponding mfpwm_release()
++ * calls once the device is no longer making changes that affect other devices,
++ * or stops producing user-visible effects that depend on the current device
++ * state being kept as-is. (e.g. after the PWM output signal is stopped)
++ *
++ * The same device function may mfpwm_acquire() multiple times while it already
++ * is active, i.e. it is re-entrant, though it needs to balance this with the
++ * same number of mfpwm_release() calls.
++ *
++ * Context: This function does not sleep.
++ *
++ * Return:
++ * * %0                 - success
++ * * %-EBUSY            - a different device function is active
++ * * %-EOVERFLOW        - the acquire counter is at its maximum
++ */
++extern int __must_check mfpwm_acquire(struct rockchip_mfpwm_func *pwmf);
++
++/**
++ * mfpwm_release - drop usage of active mfpwm device function by 1
++ * @pwmf: pointer to the calling driver instance's &struct rockchip_mfpwm_func
++ *
++ * This is the balancing call to mfpwm_acquire(). If no users of the device
++ * function remain, set the mfpwm device to have no active device function,
++ * allowing other device functions to claim it.
++ */
++extern void mfpwm_release(const struct rockchip_mfpwm_func *pwmf);
++
++#endif /* __SOC_ROCKCHIP_MFPWM_H__ */
+diff --git a/include/linux/phy/phy-hdmi.h b/include/linux/phy/phy-hdmi.h
+new file mode 100644
+index 000000000..f0ec963c6
+--- /dev/null
++++ b/include/linux/phy/phy-hdmi.h
+@@ -0,0 +1,21 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Copyright 2022,2024 NXP
++ */
++
++#ifndef __PHY_HDMI_H_
++#define __PHY_HDMI_H_
++
++/**
++ * struct phy_configure_opts_hdmi - HDMI configuration set
++ * @tmds_char_rate: HDMI TMDS Character Rate in Hertz.
++ * @bpc: Bits per color channel.
++ *
++ * This structure is used to represent the configuration state of a HDMI phy.
++ */
++struct phy_configure_opts_hdmi {
++	unsigned long long tmds_char_rate;
++	unsigned int bpc;
++};
++
++#endif /* __PHY_HDMI_H_ */
+diff --git a/include/linux/phy/phy.h b/include/linux/phy/phy.h
+index 03cd5bae9..4ac486b10 100644
+--- a/include/linux/phy/phy.h
++++ b/include/linux/phy/phy.h
+@@ -17,6 +17,7 @@
+ #include <linux/regulator/consumer.h>
+ 
+ #include <linux/phy/phy-dp.h>
++#include <linux/phy/phy-hdmi.h>
+ #include <linux/phy/phy-lvds.h>
+ #include <linux/phy/phy-mipi-dphy.h>
+ 
+@@ -42,7 +43,8 @@ enum phy_mode {
+ 	PHY_MODE_MIPI_DPHY,
+ 	PHY_MODE_SATA,
+ 	PHY_MODE_LVDS,
+-	PHY_MODE_DP
++	PHY_MODE_DP,
++	PHY_MODE_HDMI,
+ };
+ 
+ enum phy_media {
+@@ -60,11 +62,14 @@ enum phy_media {
+  *		the DisplayPort protocol.
+  * @lvds:	Configuration set applicable for phys supporting
+  *		the LVDS phy mode.
++ * @hdmi:	Configuration set applicable for phys supporting
++ *		the HDMI phy mode.
+  */
+ union phy_configure_opts {
+ 	struct phy_configure_opts_mipi_dphy	mipi_dphy;
+ 	struct phy_configure_opts_dp		dp;
+ 	struct phy_configure_opts_lvds		lvds;
++	struct phy_configure_opts_hdmi		hdmi;
+ };
+ 
+ /**
+diff --git a/include/linux/pwm.h b/include/linux/pwm.h
+index 8acd60b53..16f46d1f7 100644
+--- a/include/linux/pwm.h
++++ b/include/linux/pwm.h
+@@ -49,6 +49,31 @@ enum {
+ 	PWMF_EXPORTED = 1,
+ };
+ 
++/**
++ * struct pwm_waveform - description of a PWM waveform
++ * @period_length_ns: PWM period
++ * @duty_length_ns: PWM duty cycle
++ * @duty_offset_ns: offset of the rising edge from the period's start
++ *
++ * This is a representation of a PWM waveform alternative to struct pwm_state
++ * below. It's more expressive than struct pwm_state as it contains a
++ * duty_offset_ns and so can represent offsets other than zero (with .polarity =
++ * PWM_POLARITY_NORMAL) and period - duty_cycle (.polarity =
++ * PWM_POLARITY_INVERSED).
++ *
++ * Note there is no explicit bool for enabled. A "disabled" PWM is represented
++ * by .period_length_ns = 0. Note further that the behaviour of a "disabled" PWM
++ * is undefined. Depending on the hardware's capabilities it might drive the
++ * active or inactive level, go high-z or even continue to toggle.
++ *
++ * The unit for all three members is nanoseconds.
++ */
++struct pwm_waveform {
++	u64 period_length_ns;
++	u64 duty_length_ns;
++	u64 duty_offset_ns;
++};
++
+ /*
+  * struct pwm_state - state of a PWM channel
+  * @period: PWM period (in nanoseconds)
+@@ -193,6 +218,8 @@ static inline void pwm_init_state(const struct pwm_device *pwm,
+  *
+  * pwm_get_state(pwm, &state);
+  * duty = pwm_get_relative_duty_cycle(&state, 100);
++ *
++ * Returns: rounded relative duty cycle multiplied by @scale
+  */
+ static inline unsigned int
+ pwm_get_relative_duty_cycle(const struct pwm_state *state, unsigned int scale)
+@@ -219,8 +246,8 @@ pwm_get_relative_duty_cycle(const struct pwm_state *state, unsigned int scale)
+  * pwm_set_relative_duty_cycle(&state, 50, 100);
+  * pwm_apply_might_sleep(pwm, &state);
+  *
+- * This functions returns -EINVAL if @duty_cycle and/or @scale are
+- * inconsistent (@scale == 0 or @duty_cycle > @scale).
++ * Returns: 0 on success or ``-EINVAL`` if @duty_cycle and/or @scale are
++ * inconsistent (@scale == 0 or @duty_cycle > @scale)
+  */
+ static inline int
+ pwm_set_relative_duty_cycle(struct pwm_state *state, unsigned int duty_cycle,
+@@ -259,6 +286,17 @@ struct pwm_ops {
+ 	void (*free)(struct pwm_chip *chip, struct pwm_device *pwm);
+ 	int (*capture)(struct pwm_chip *chip, struct pwm_device *pwm,
+ 		       struct pwm_capture *result, unsigned long timeout);
++
++	size_t sizeof_wfhw;
++	int (*round_waveform_tohw)(struct pwm_chip *chip, struct pwm_device *pwm,
++				   const struct pwm_waveform *wf, void *wfhw);
++	int (*round_waveform_fromhw)(struct pwm_chip *chip, struct pwm_device *pwm,
++				     const void *wfhw, struct pwm_waveform *wf);
++	int (*read_waveform)(struct pwm_chip *chip, struct pwm_device *pwm,
++			    void *wfhw);
++	int (*write_waveform)(struct pwm_chip *chip, struct pwm_device *pwm,
++			      const void *wfhw);
++
+ 	int (*apply)(struct pwm_chip *chip, struct pwm_device *pwm,
+ 		     const struct pwm_state *state);
+ 	int (*get_state)(struct pwm_chip *chip, struct pwm_device *pwm,
+@@ -275,6 +313,9 @@ struct pwm_ops {
+  * @of_xlate: request a PWM device given a device tree PWM specifier
+  * @atomic: can the driver's ->apply() be called in atomic context
+  * @uses_pwmchip_alloc: signals if pwmchip_allow was used to allocate this chip
++ * @operational: signals if the chip can be used (or is already deregistered)
++ * @nonatomic_lock: mutex for nonatomic chips
++ * @atomic_lock: mutex for atomic chips
+  * @pwms: array of PWM devices allocated by the framework
+  */
+ struct pwm_chip {
+@@ -290,9 +331,36 @@ struct pwm_chip {
+ 
+ 	/* only used internally by the PWM framework */
+ 	bool uses_pwmchip_alloc;
++	bool operational;
++	union {
++		/*
++		 * depending on the chip being atomic or not either the mutex or
++		 * the spinlock is used. It protects .operational and
++		 * synchronizes the callbacks in .ops
++		 */
++		struct mutex nonatomic_lock;
++		spinlock_t atomic_lock;
++	};
+ 	struct pwm_device pwms[] __counted_by(npwm);
+ };
+ 
++/**
++ * pwmchip_supports_waveform() - checks if the given chip supports waveform callbacks
++ * @chip: The pwm_chip to test
++ *
++ * Returns: true iff the pwm chip support the waveform functions like
++ * pwm_set_waveform_might_sleep() and pwm_round_waveform_might_sleep()
++ */
++static inline bool pwmchip_supports_waveform(struct pwm_chip *chip)
++{
++	/*
++	 * only check for .write_waveform(). If that is available,
++	 * .round_waveform_tohw() and .round_waveform_fromhw() asserted to be
++	 * available, too, in pwmchip_add().
++	 */
++	return chip->ops->write_waveform != NULL;
++}
++
+ static inline struct device *pwmchip_parent(const struct pwm_chip *chip)
+ {
+ 	return chip->dev.parent;
+@@ -309,7 +377,11 @@ static inline void pwmchip_set_drvdata(struct pwm_chip *chip, void *data)
+ }
+ 
+ #if IS_ENABLED(CONFIG_PWM)
+-/* PWM user APIs */
++
++/* PWM consumer APIs */
++int pwm_round_waveform_might_sleep(struct pwm_device *pwm, struct pwm_waveform *wf);
++int pwm_get_waveform_might_sleep(struct pwm_device *pwm, struct pwm_waveform *wf);
++int pwm_set_waveform_might_sleep(struct pwm_device *pwm, const struct pwm_waveform *wf, bool exact);
+ int pwm_apply_might_sleep(struct pwm_device *pwm, const struct pwm_state *state);
+ int pwm_apply_atomic(struct pwm_device *pwm, const struct pwm_state *state);
+ int pwm_adjust_config(struct pwm_device *pwm);
+diff --git a/include/linux/stmmac.h b/include/linux/stmmac.h
+index d79ff252c..e95e2b717 100644
+--- a/include/linux/stmmac.h
++++ b/include/linux/stmmac.h
+@@ -263,6 +263,7 @@ struct plat_stmmacenet_data {
+ 	int mac_port_sel_speed;
+ 	int has_xgmac;
+ 	u8 vlan_fail_q;
++	bool vlhash_en;
+ 	unsigned int eee_usecs_rate;
+ 	struct pci_dev *pdev;
+ 	int int_snapshot_num;
+diff --git a/include/soc/rockchip/rockchip_sip.h b/include/soc/rockchip/rockchip_sip.h
+index c46a9ae2a..92117958a 100644
+--- a/include/soc/rockchip/rockchip_sip.h
++++ b/include/soc/rockchip/rockchip_sip.h
+@@ -6,6 +6,9 @@
+ #ifndef __SOC_ROCKCHIP_SIP_H
+ #define __SOC_ROCKCHIP_SIP_H
+ 
++#define ROCKCHIP_SIP_SUSPEND_MODE		0x82000003
++#define ROCKCHIP_SLEEP_PD_CONFIG		0xff
++
+ #define ROCKCHIP_SIP_DRAM_FREQ			0x82000008
+ #define ROCKCHIP_SIP_CONFIG_DRAM_INIT		0x00
+ #define ROCKCHIP_SIP_CONFIG_DRAM_SET_RATE	0x01
+@@ -16,5 +19,16 @@
+ #define ROCKCHIP_SIP_CONFIG_DRAM_CLR_IRQ	0x06
+ #define ROCKCHIP_SIP_CONFIG_DRAM_SET_PARAM	0x07
+ #define ROCKCHIP_SIP_CONFIG_DRAM_SET_ODT_PD	0x08
++#define ROCKCHIP_SIP_CONFIG_DRAM_GET_VERSION	0x08
++
++#define ROCKCHIP_SIP_SHARE_MEM			0x82000009
++
++/* Share mem page types */
++typedef enum {
++    SHARE_PAGE_TYPE_INVALID = 0,
++    SHARE_PAGE_TYPE_UARTDBG,
++    SHARE_PAGE_TYPE_DDR,
++    SHARE_PAGE_TYPE_MAX,
++} share_page_type_t;
+ 
+ #endif
+diff --git a/include/trace/events/pwm.h b/include/trace/events/pwm.h
+index 8022701c4..8ba898fd3 100644
+--- a/include/trace/events/pwm.h
++++ b/include/trace/events/pwm.h
+@@ -8,15 +8,135 @@
+ #include <linux/pwm.h>
+ #include <linux/tracepoint.h>
+ 
++#define TP_PROTO_pwm(args...)							\
++	TP_PROTO(struct pwm_device *pwm, args)
++
++#define TP_ARGS_pwm(args...)							\
++	TP_ARGS(pwm, args)
++
++#define TP_STRUCT__entry_pwm(args...)						\
++	TP_STRUCT__entry(							\
++		__field(unsigned int, chipid)					\
++		__field(unsigned int, hwpwm)					\
++		args)
++
++#define TP_fast_assign_pwm(args...)						\
++	TP_fast_assign(								\
++		__entry->chipid = pwm->chip->id;				\
++		__entry->hwpwm = pwm->hwpwm;					\
++		args)
++
++#define TP_printk_pwm(fmt, args...)						\
++	TP_printk("pwmchip%u.%u: " fmt, __entry->chipid, __entry->hwpwm, args)
++
++#define __field_pwmwf(wf)							\
++	__field(u64, wf ## _period_length_ns)					\
++	__field(u64, wf ## _duty_length_ns)					\
++	__field(u64, wf ## _duty_offset_ns)					\
++
++#define fast_assign_pwmwf(wf)							\
++	__entry->wf ## _period_length_ns = wf->period_length_ns;		\
++	__entry->wf ## _duty_length_ns = wf->duty_length_ns;			\
++	__entry->wf ## _duty_offset_ns = wf->duty_offset_ns
++
++#define printk_pwmwf_format(wf)							\
++	"%lld/%lld [+%lld]"
++
++#define printk_pwmwf_formatargs(wf)						\
++	__entry->wf ## _duty_length_ns, __entry->wf ## _period_length_ns, __entry->wf ## _duty_offset_ns
++
++TRACE_EVENT(pwm_round_waveform_tohw,
++
++	TP_PROTO_pwm(const struct pwm_waveform *wf, void *wfhw, int err),
++
++	TP_ARGS_pwm(wf, wfhw, err),
++
++	TP_STRUCT__entry_pwm(
++		__field_pwmwf(wf)
++		__field(void *, wfhw)
++		__field(int, err)
++	),
++
++	TP_fast_assign_pwm(
++		fast_assign_pwmwf(wf);
++		__entry->wfhw = wfhw;
++		__entry->err = err;
++	),
++
++	TP_printk_pwm(printk_pwmwf_format(wf) " > %p err=%d",
++		printk_pwmwf_formatargs(wf), __entry->wfhw, __entry->err)
++);
++
++TRACE_EVENT(pwm_round_waveform_fromhw,
++
++	TP_PROTO_pwm(const void *wfhw, struct pwm_waveform *wf, int err),
++
++	TP_ARGS_pwm(wfhw, wf, err),
++
++	TP_STRUCT__entry_pwm(
++		__field(const void *, wfhw)
++		__field_pwmwf(wf)
++		__field(int, err)
++	),
++
++	TP_fast_assign_pwm(
++		__entry->wfhw = wfhw;
++		fast_assign_pwmwf(wf);
++		__entry->err = err;
++	),
++
++	TP_printk_pwm("%p > " printk_pwmwf_format(wf) " err=%d",
++		__entry->wfhw, printk_pwmwf_formatargs(wf), __entry->err)
++);
++
++TRACE_EVENT(pwm_read_waveform,
++
++	TP_PROTO_pwm(void *wfhw, int err),
++
++	TP_ARGS_pwm(wfhw, err),
++
++	TP_STRUCT__entry_pwm(
++		__field(void *, wfhw)
++		__field(int, err)
++	),
++
++	TP_fast_assign_pwm(
++		__entry->wfhw = wfhw;
++		__entry->err = err;
++	),
++
++	TP_printk_pwm("%p err=%d",
++		__entry->wfhw, __entry->err)
++);
++
++TRACE_EVENT(pwm_write_waveform,
++
++	TP_PROTO_pwm(const void *wfhw, int err),
++
++	TP_ARGS_pwm(wfhw, err),
++
++	TP_STRUCT__entry_pwm(
++		__field(const void *, wfhw)
++		__field(int, err)
++	),
++
++	TP_fast_assign_pwm(
++		__entry->wfhw = wfhw;
++		__entry->err = err;
++	),
++
++	TP_printk_pwm("%p err=%d",
++		__entry->wfhw, __entry->err)
++);
++
++
+ DECLARE_EVENT_CLASS(pwm,
+ 
+ 	TP_PROTO(struct pwm_device *pwm, const struct pwm_state *state, int err),
+ 
+ 	TP_ARGS(pwm, state, err),
+ 
+-	TP_STRUCT__entry(
+-		__field(unsigned int, chipid)
+-		__field(unsigned int, hwpwm)
++	TP_STRUCT__entry_pwm(
+ 		__field(u64, period)
+ 		__field(u64, duty_cycle)
+ 		__field(enum pwm_polarity, polarity)
+@@ -24,9 +144,7 @@ DECLARE_EVENT_CLASS(pwm,
+ 		__field(int, err)
+ 	),
+ 
+-	TP_fast_assign(
+-		__entry->chipid = pwm->chip->id;
+-		__entry->hwpwm = pwm->hwpwm;
++	TP_fast_assign_pwm(
+ 		__entry->period = state->period;
+ 		__entry->duty_cycle = state->duty_cycle;
+ 		__entry->polarity = state->polarity;
+@@ -34,8 +152,8 @@ DECLARE_EVENT_CLASS(pwm,
+ 		__entry->err = err;
+ 	),
+ 
+-	TP_printk("pwmchip%u.%u: period=%llu duty_cycle=%llu polarity=%d enabled=%d err=%d",
+-		  __entry->chipid, __entry->hwpwm, __entry->period, __entry->duty_cycle,
++	TP_printk_pwm("period=%llu duty_cycle=%llu polarity=%d enabled=%d err=%d",
++		  __entry->period, __entry->duty_cycle,
+ 		  __entry->polarity, __entry->enabled, __entry->err)
+ 
+ );
+diff --git a/include/ufs/ufshcd.h b/include/ufs/ufshcd.h
+index bdc5564b1..a3681ed1c 100644
+--- a/include/ufs/ufshcd.h
++++ b/include/ufs/ufshcd.h
+@@ -1368,6 +1368,8 @@ extern int ufshcd_system_thaw(struct device *dev);
+ extern int ufshcd_system_restore(struct device *dev);
+ #endif
+ 
++extern int ufshcd_dme_reset(struct ufs_hba *hba);
++extern int ufshcd_dme_enable(struct ufs_hba *hba);
+ extern int ufshcd_dme_configure_adapt(struct ufs_hba *hba,
+ 				      int agreed_gear,
+ 				      int adapt_val);
+diff --git a/include/ufs/ufshcd.h.orig b/include/ufs/ufshcd.h.orig
+new file mode 100644
+index 000000000..bdc5564b1
+--- /dev/null
++++ b/include/ufs/ufshcd.h.orig
+@@ -0,0 +1,1499 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Universal Flash Storage Host controller driver
++ * Copyright (C) 2011-2013 Samsung India Software Operations
++ * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
++ *
++ * Authors:
++ *	Santosh Yaraganavi <santosh.sy@samsung.com>
++ *	Vinayak Holikatti <h.vinayak@samsung.com>
++ */
++
++#ifndef _UFSHCD_H
++#define _UFSHCD_H
++
++#include <linux/bitfield.h>
++#include <linux/blk-crypto-profile.h>
++#include <linux/blk-mq.h>
++#include <linux/devfreq.h>
++#include <linux/fault-inject.h>
++#include <linux/debugfs.h>
++#include <linux/msi.h>
++#include <linux/pm_runtime.h>
++#include <linux/dma-direction.h>
++#include <scsi/scsi_device.h>
++#include <scsi/scsi_host.h>
++#include <ufs/unipro.h>
++#include <ufs/ufs.h>
++#include <ufs/ufs_quirks.h>
++#include <ufs/ufshci.h>
++
++#define UFSHCD "ufshcd"
++
++struct scsi_device;
++struct ufs_hba;
++
++enum dev_cmd_type {
++	DEV_CMD_TYPE_NOP		= 0x0,
++	DEV_CMD_TYPE_QUERY		= 0x1,
++	DEV_CMD_TYPE_RPMB		= 0x2,
++};
++
++enum ufs_event_type {
++	/* uic specific errors */
++	UFS_EVT_PA_ERR = 0,
++	UFS_EVT_DL_ERR,
++	UFS_EVT_NL_ERR,
++	UFS_EVT_TL_ERR,
++	UFS_EVT_DME_ERR,
++
++	/* fatal errors */
++	UFS_EVT_AUTO_HIBERN8_ERR,
++	UFS_EVT_FATAL_ERR,
++	UFS_EVT_LINK_STARTUP_FAIL,
++	UFS_EVT_RESUME_ERR,
++	UFS_EVT_SUSPEND_ERR,
++	UFS_EVT_WL_SUSP_ERR,
++	UFS_EVT_WL_RES_ERR,
++
++	/* abnormal events */
++	UFS_EVT_DEV_RESET,
++	UFS_EVT_HOST_RESET,
++	UFS_EVT_ABORT,
++
++	UFS_EVT_CNT,
++};
++
++/**
++ * struct uic_command - UIC command structure
++ * @command: UIC command
++ * @argument1: UIC command argument 1
++ * @argument2: UIC command argument 2
++ * @argument3: UIC command argument 3
++ * @cmd_active: Indicate if UIC command is outstanding
++ * @done: UIC command completion
++ */
++struct uic_command {
++	const u32 command;
++	const u32 argument1;
++	u32 argument2;
++	u32 argument3;
++	int cmd_active;
++	struct completion done;
++};
++
++/* Used to differentiate the power management options */
++enum ufs_pm_op {
++	UFS_RUNTIME_PM,
++	UFS_SYSTEM_PM,
++	UFS_SHUTDOWN_PM,
++};
++
++/* Host <-> Device UniPro Link state */
++enum uic_link_state {
++	UIC_LINK_OFF_STATE	= 0, /* Link powered down or disabled */
++	UIC_LINK_ACTIVE_STATE	= 1, /* Link is in Fast/Slow/Sleep state */
++	UIC_LINK_HIBERN8_STATE	= 2, /* Link is in Hibernate state */
++	UIC_LINK_BROKEN_STATE	= 3, /* Link is in broken state */
++};
++
++#define ufshcd_is_link_off(hba) ((hba)->uic_link_state == UIC_LINK_OFF_STATE)
++#define ufshcd_is_link_active(hba) ((hba)->uic_link_state == \
++				    UIC_LINK_ACTIVE_STATE)
++#define ufshcd_is_link_hibern8(hba) ((hba)->uic_link_state == \
++				    UIC_LINK_HIBERN8_STATE)
++#define ufshcd_is_link_broken(hba) ((hba)->uic_link_state == \
++				   UIC_LINK_BROKEN_STATE)
++#define ufshcd_set_link_off(hba) ((hba)->uic_link_state = UIC_LINK_OFF_STATE)
++#define ufshcd_set_link_active(hba) ((hba)->uic_link_state = \
++				    UIC_LINK_ACTIVE_STATE)
++#define ufshcd_set_link_hibern8(hba) ((hba)->uic_link_state = \
++				    UIC_LINK_HIBERN8_STATE)
++#define ufshcd_set_link_broken(hba) ((hba)->uic_link_state = \
++				    UIC_LINK_BROKEN_STATE)
++
++#define ufshcd_set_ufs_dev_active(h) \
++	((h)->curr_dev_pwr_mode = UFS_ACTIVE_PWR_MODE)
++#define ufshcd_set_ufs_dev_sleep(h) \
++	((h)->curr_dev_pwr_mode = UFS_SLEEP_PWR_MODE)
++#define ufshcd_set_ufs_dev_poweroff(h) \
++	((h)->curr_dev_pwr_mode = UFS_POWERDOWN_PWR_MODE)
++#define ufshcd_set_ufs_dev_deepsleep(h) \
++	((h)->curr_dev_pwr_mode = UFS_DEEPSLEEP_PWR_MODE)
++#define ufshcd_is_ufs_dev_active(h) \
++	((h)->curr_dev_pwr_mode == UFS_ACTIVE_PWR_MODE)
++#define ufshcd_is_ufs_dev_sleep(h) \
++	((h)->curr_dev_pwr_mode == UFS_SLEEP_PWR_MODE)
++#define ufshcd_is_ufs_dev_poweroff(h) \
++	((h)->curr_dev_pwr_mode == UFS_POWERDOWN_PWR_MODE)
++#define ufshcd_is_ufs_dev_deepsleep(h) \
++	((h)->curr_dev_pwr_mode == UFS_DEEPSLEEP_PWR_MODE)
++
++/*
++ * UFS Power management levels.
++ * Each level is in increasing order of power savings, except DeepSleep
++ * which is lower than PowerDown with power on but not PowerDown with
++ * power off.
++ */
++enum ufs_pm_level {
++	UFS_PM_LVL_0,
++	UFS_PM_LVL_1,
++	UFS_PM_LVL_2,
++	UFS_PM_LVL_3,
++	UFS_PM_LVL_4,
++	UFS_PM_LVL_5,
++	UFS_PM_LVL_6,
++	UFS_PM_LVL_MAX
++};
++
++struct ufs_pm_lvl_states {
++	enum ufs_dev_pwr_mode dev_state;
++	enum uic_link_state link_state;
++};
++
++/**
++ * struct ufshcd_lrb - local reference block
++ * @utr_descriptor_ptr: UTRD address of the command
++ * @ucd_req_ptr: UCD address of the command
++ * @ucd_rsp_ptr: Response UPIU address for this command
++ * @ucd_prdt_ptr: PRDT address of the command
++ * @utrd_dma_addr: UTRD dma address for debug
++ * @ucd_prdt_dma_addr: PRDT dma address for debug
++ * @ucd_rsp_dma_addr: UPIU response dma address for debug
++ * @ucd_req_dma_addr: UPIU request dma address for debug
++ * @cmd: pointer to SCSI command
++ * @scsi_status: SCSI status of the command
++ * @command_type: SCSI, UFS, Query.
++ * @task_tag: Task tag of the command
++ * @lun: LUN of the command
++ * @intr_cmd: Interrupt command (doesn't participate in interrupt aggregation)
++ * @issue_time_stamp: time stamp for debug purposes (CLOCK_MONOTONIC)
++ * @issue_time_stamp_local_clock: time stamp for debug purposes (local_clock)
++ * @compl_time_stamp: time stamp for statistics (CLOCK_MONOTONIC)
++ * @compl_time_stamp_local_clock: time stamp for debug purposes (local_clock)
++ * @crypto_key_slot: the key slot to use for inline crypto (-1 if none)
++ * @data_unit_num: the data unit number for the first block for inline crypto
++ * @req_abort_skip: skip request abort task flag
++ */
++struct ufshcd_lrb {
++	struct utp_transfer_req_desc *utr_descriptor_ptr;
++	struct utp_upiu_req *ucd_req_ptr;
++	struct utp_upiu_rsp *ucd_rsp_ptr;
++	struct ufshcd_sg_entry *ucd_prdt_ptr;
++
++	dma_addr_t utrd_dma_addr;
++	dma_addr_t ucd_req_dma_addr;
++	dma_addr_t ucd_rsp_dma_addr;
++	dma_addr_t ucd_prdt_dma_addr;
++
++	struct scsi_cmnd *cmd;
++	int scsi_status;
++
++	int command_type;
++	int task_tag;
++	u8 lun; /* UPIU LUN id field is only 8-bit wide */
++	bool intr_cmd;
++	ktime_t issue_time_stamp;
++	u64 issue_time_stamp_local_clock;
++	ktime_t compl_time_stamp;
++	u64 compl_time_stamp_local_clock;
++#ifdef CONFIG_SCSI_UFS_CRYPTO
++	int crypto_key_slot;
++	u64 data_unit_num;
++#endif
++
++	bool req_abort_skip;
++};
++
++/**
++ * struct ufs_query_req - parameters for building a query request
++ * @query_func: UPIU header query function
++ * @upiu_req: the query request data
++ */
++struct ufs_query_req {
++	u8 query_func;
++	struct utp_upiu_query upiu_req;
++};
++
++/**
++ * struct ufs_query_resp - UPIU QUERY
++ * @response: device response code
++ * @upiu_res: query response data
++ */
++struct ufs_query_res {
++	struct utp_upiu_query upiu_res;
++};
++
++/**
++ * struct ufs_query - holds relevant data structures for query request
++ * @request: request upiu and function
++ * @descriptor: buffer for sending/receiving descriptor
++ * @response: response upiu and response
++ */
++struct ufs_query {
++	struct ufs_query_req request;
++	u8 *descriptor;
++	struct ufs_query_res response;
++};
++
++/**
++ * struct ufs_dev_cmd - all assosiated fields with device management commands
++ * @type: device management command type - Query, NOP OUT
++ * @lock: lock to allow one command at a time
++ * @complete: internal commands completion
++ * @query: Device management query information
++ */
++struct ufs_dev_cmd {
++	enum dev_cmd_type type;
++	struct mutex lock;
++	struct completion *complete;
++	struct ufs_query query;
++};
++
++/**
++ * struct ufs_clk_info - UFS clock related info
++ * @list: list headed by hba->clk_list_head
++ * @clk: clock node
++ * @name: clock name
++ * @max_freq: maximum frequency supported by the clock
++ * @min_freq: min frequency that can be used for clock scaling
++ * @curr_freq: indicates the current frequency that it is set to
++ * @keep_link_active: indicates that the clk should not be disabled if
++ *		      link is active
++ * @enabled: variable to check against multiple enable/disable
++ */
++struct ufs_clk_info {
++	struct list_head list;
++	struct clk *clk;
++	const char *name;
++	u32 max_freq;
++	u32 min_freq;
++	u32 curr_freq;
++	bool keep_link_active;
++	bool enabled;
++};
++
++enum ufs_notify_change_status {
++	PRE_CHANGE,
++	POST_CHANGE,
++};
++
++struct ufs_pa_layer_attr {
++	u32 gear_rx;
++	u32 gear_tx;
++	u32 lane_rx;
++	u32 lane_tx;
++	u32 pwr_rx;
++	u32 pwr_tx;
++	u32 hs_rate;
++};
++
++struct ufs_pwr_mode_info {
++	bool is_valid;
++	struct ufs_pa_layer_attr info;
++};
++
++/**
++ * struct ufs_hba_variant_ops - variant specific callbacks
++ * @name: variant name
++ * @max_num_rtt: maximum RTT supported by the host
++ * @init: called when the driver is initialized
++ * @exit: called to cleanup everything done in init
++ * @set_dma_mask: For setting another DMA mask than indicated by the 64AS
++ *	capability bit.
++ * @get_ufs_hci_version: called to get UFS HCI version
++ * @clk_scale_notify: notifies that clks are scaled up/down
++ * @setup_clocks: called before touching any of the controller registers
++ * @hce_enable_notify: called before and after HCE enable bit is set to allow
++ *                     variant specific Uni-Pro initialization.
++ * @link_startup_notify: called before and after Link startup is carried out
++ *                       to allow variant specific Uni-Pro initialization.
++ * @pwr_change_notify: called before and after a power mode change
++ *			is carried out to allow vendor spesific capabilities
++ *			to be set. PRE_CHANGE can modify final_params based
++ *			on desired_pwr_mode, but POST_CHANGE must not alter
++ *			the final_params parameter
++ * @setup_xfer_req: called before any transfer request is issued
++ *                  to set some things
++ * @setup_task_mgmt: called before any task management request is issued
++ *                  to set some things
++ * @hibern8_notify: called around hibern8 enter/exit
++ * @apply_dev_quirks: called to apply device specific quirks
++ * @fixup_dev_quirks: called to modify device specific quirks
++ * @suspend: called during host controller PM callback
++ * @resume: called during host controller PM callback
++ * @dbg_register_dump: used to dump controller debug information
++ * @phy_initialization: used to initialize phys
++ * @device_reset: called to issue a reset pulse on the UFS device
++ * @config_scaling_param: called to configure clock scaling parameters
++ * @program_key: program or evict an inline encryption key
++ * @fill_crypto_prdt: initialize crypto-related fields in the PRDT
++ * @event_notify: called to notify important events
++ * @mcq_config_resource: called to configure MCQ platform resources
++ * @get_hba_mac: reports maximum number of outstanding commands supported by
++ *	the controller. Should be implemented for UFSHCI 4.0 or later
++ *	controllers that are not compliant with the UFSHCI 4.0 specification.
++ * @op_runtime_config: called to config Operation and runtime regs Pointers
++ * @get_outstanding_cqs: called to get outstanding completion queues
++ * @config_esi: called to config Event Specific Interrupt
++ * @config_scsi_dev: called to configure SCSI device parameters
++ */
++struct ufs_hba_variant_ops {
++	const char *name;
++	int	max_num_rtt;
++	int	(*init)(struct ufs_hba *);
++	void    (*exit)(struct ufs_hba *);
++	u32	(*get_ufs_hci_version)(struct ufs_hba *);
++	int	(*set_dma_mask)(struct ufs_hba *);
++	int	(*clk_scale_notify)(struct ufs_hba *, bool,
++				    enum ufs_notify_change_status);
++	int	(*setup_clocks)(struct ufs_hba *, bool,
++				enum ufs_notify_change_status);
++	int	(*hce_enable_notify)(struct ufs_hba *,
++				     enum ufs_notify_change_status);
++	int	(*link_startup_notify)(struct ufs_hba *,
++				       enum ufs_notify_change_status);
++	int	(*pwr_change_notify)(struct ufs_hba *,
++				enum ufs_notify_change_status status,
++				struct ufs_pa_layer_attr *desired_pwr_mode,
++				struct ufs_pa_layer_attr *final_params);
++	void	(*setup_xfer_req)(struct ufs_hba *hba, int tag,
++				  bool is_scsi_cmd);
++	void	(*setup_task_mgmt)(struct ufs_hba *, int, u8);
++	void    (*hibern8_notify)(struct ufs_hba *, enum uic_cmd_dme,
++					enum ufs_notify_change_status);
++	int	(*apply_dev_quirks)(struct ufs_hba *hba);
++	void	(*fixup_dev_quirks)(struct ufs_hba *hba);
++	int     (*suspend)(struct ufs_hba *, enum ufs_pm_op,
++					enum ufs_notify_change_status);
++	int     (*resume)(struct ufs_hba *, enum ufs_pm_op);
++	void	(*dbg_register_dump)(struct ufs_hba *hba);
++	int	(*phy_initialization)(struct ufs_hba *);
++	int	(*device_reset)(struct ufs_hba *hba);
++	void	(*config_scaling_param)(struct ufs_hba *hba,
++				struct devfreq_dev_profile *profile,
++				struct devfreq_simple_ondemand_data *data);
++	int	(*program_key)(struct ufs_hba *hba,
++			       const union ufs_crypto_cfg_entry *cfg, int slot);
++	int	(*fill_crypto_prdt)(struct ufs_hba *hba,
++				    const struct bio_crypt_ctx *crypt_ctx,
++				    void *prdt, unsigned int num_segments);
++	void	(*event_notify)(struct ufs_hba *hba,
++				enum ufs_event_type evt, void *data);
++	int	(*mcq_config_resource)(struct ufs_hba *hba);
++	int	(*get_hba_mac)(struct ufs_hba *hba);
++	int	(*op_runtime_config)(struct ufs_hba *hba);
++	int	(*get_outstanding_cqs)(struct ufs_hba *hba,
++				       unsigned long *ocqs);
++	int	(*config_esi)(struct ufs_hba *hba);
++};
++
++/* clock gating state  */
++enum clk_gating_state {
++	CLKS_OFF,
++	CLKS_ON,
++	REQ_CLKS_OFF,
++	REQ_CLKS_ON,
++};
++
++/**
++ * struct ufs_clk_gating - UFS clock gating related info
++ * @gate_work: worker to turn off clocks after some delay as specified in
++ * delay_ms
++ * @ungate_work: worker to turn on clocks that will be used in case of
++ * interrupt context
++ * @clk_gating_workq: workqueue for clock gating work.
++ * @lock: serialize access to some struct ufs_clk_gating members. An outer lock
++ * relative to the host lock
++ * @state: the current clocks state
++ * @delay_ms: gating delay in ms
++ * @is_suspended: clk gating is suspended when set to 1 which can be used
++ * during suspend/resume
++ * @delay_attr: sysfs attribute to control delay_attr
++ * @enable_attr: sysfs attribute to enable/disable clock gating
++ * @is_enabled: Indicates the current status of clock gating
++ * @is_initialized: Indicates whether clock gating is initialized or not
++ * @active_reqs: number of requests that are pending and should be waited for
++ * completion before gating clocks.
++ */
++struct ufs_clk_gating {
++	struct delayed_work gate_work;
++	struct work_struct ungate_work;
++	struct workqueue_struct *clk_gating_workq;
++
++	spinlock_t lock;
++
++	enum clk_gating_state state;
++	unsigned long delay_ms;
++	bool is_suspended;
++	struct device_attribute delay_attr;
++	struct device_attribute enable_attr;
++	bool is_enabled;
++	bool is_initialized;
++	int active_reqs;
++};
++
++/**
++ * struct ufs_clk_scaling - UFS clock scaling related data
++ * @active_reqs: number of requests that are pending. If this is zero when
++ * devfreq ->target() function is called then schedule "suspend_work" to
++ * suspend devfreq.
++ * @tot_busy_t: Total busy time in current polling window
++ * @window_start_t: Start time (in jiffies) of the current polling window
++ * @busy_start_t: Start time of current busy period
++ * @enable_attr: sysfs attribute to enable/disable clock scaling
++ * @saved_pwr_info: UFS power mode may also be changed during scaling and this
++ * one keeps track of previous power mode.
++ * @workq: workqueue to schedule devfreq suspend/resume work
++ * @suspend_work: worker to suspend devfreq
++ * @resume_work: worker to resume devfreq
++ * @target_freq: frequency requested by devfreq framework
++ * @min_gear: lowest HS gear to scale down to
++ * @is_enabled: tracks if scaling is currently enabled or not, controlled by
++ *		clkscale_enable sysfs node
++ * @is_allowed: tracks if scaling is currently allowed or not, used to block
++ *		clock scaling which is not invoked from devfreq governor
++ * @is_initialized: Indicates whether clock scaling is initialized or not
++ * @is_busy_started: tracks if busy period has started or not
++ * @is_suspended: tracks if devfreq is suspended or not
++ */
++struct ufs_clk_scaling {
++	int active_reqs;
++	unsigned long tot_busy_t;
++	ktime_t window_start_t;
++	ktime_t busy_start_t;
++	struct device_attribute enable_attr;
++	struct ufs_pa_layer_attr saved_pwr_info;
++	struct workqueue_struct *workq;
++	struct work_struct suspend_work;
++	struct work_struct resume_work;
++	unsigned long target_freq;
++	u32 min_gear;
++	bool is_enabled;
++	bool is_allowed;
++	bool is_initialized;
++	bool is_busy_started;
++	bool is_suspended;
++	bool suspend_on_no_request;
++};
++
++#define UFS_EVENT_HIST_LENGTH 8
++/**
++ * struct ufs_event_hist - keeps history of errors
++ * @pos: index to indicate cyclic buffer position
++ * @val: cyclic buffer for registers value
++ * @tstamp: cyclic buffer for time stamp
++ * @cnt: error counter
++ */
++struct ufs_event_hist {
++	int pos;
++	u32 val[UFS_EVENT_HIST_LENGTH];
++	u64 tstamp[UFS_EVENT_HIST_LENGTH];
++	unsigned long long cnt;
++};
++
++/**
++ * struct ufs_stats - keeps usage/err statistics
++ * @last_intr_status: record the last interrupt status.
++ * @last_intr_ts: record the last interrupt timestamp.
++ * @hibern8_exit_cnt: Counter to keep track of number of exits,
++ *		reset this after link-startup.
++ * @last_hibern8_exit_tstamp: Set time after the hibern8 exit.
++ *		Clear after the first successful command completion.
++ * @event: array with event history.
++ */
++struct ufs_stats {
++	u32 last_intr_status;
++	u64 last_intr_ts;
++
++	u32 hibern8_exit_cnt;
++	u64 last_hibern8_exit_tstamp;
++	struct ufs_event_hist event[UFS_EVT_CNT];
++};
++
++/**
++ * enum ufshcd_state - UFS host controller state
++ * @UFSHCD_STATE_RESET: Link is not operational. Postpone SCSI command
++ *	processing.
++ * @UFSHCD_STATE_OPERATIONAL: The host controller is operational and can process
++ *	SCSI commands.
++ * @UFSHCD_STATE_EH_SCHEDULED_NON_FATAL: The error handler has been scheduled.
++ *	SCSI commands may be submitted to the controller.
++ * @UFSHCD_STATE_EH_SCHEDULED_FATAL: The error handler has been scheduled. Fail
++ *	newly submitted SCSI commands with error code DID_BAD_TARGET.
++ * @UFSHCD_STATE_ERROR: An unrecoverable error occurred, e.g. link recovery
++ *	failed. Fail all SCSI commands with error code DID_ERROR.
++ */
++enum ufshcd_state {
++	UFSHCD_STATE_RESET,
++	UFSHCD_STATE_OPERATIONAL,
++	UFSHCD_STATE_EH_SCHEDULED_NON_FATAL,
++	UFSHCD_STATE_EH_SCHEDULED_FATAL,
++	UFSHCD_STATE_ERROR,
++};
++
++enum ufshcd_quirks {
++	/* Interrupt aggregation support is broken */
++	UFSHCD_QUIRK_BROKEN_INTR_AGGR			= 1 << 0,
++
++	/*
++	 * delay before each dme command is required as the unipro
++	 * layer has shown instabilities
++	 */
++	UFSHCD_QUIRK_DELAY_BEFORE_DME_CMDS		= 1 << 1,
++
++	/*
++	 * If UFS host controller is having issue in processing LCC (Line
++	 * Control Command) coming from device then enable this quirk.
++	 * When this quirk is enabled, host controller driver should disable
++	 * the LCC transmission on UFS device (by clearing TX_LCC_ENABLE
++	 * attribute of device to 0).
++	 */
++	UFSHCD_QUIRK_BROKEN_LCC				= 1 << 2,
++
++	/*
++	 * The attribute PA_RXHSUNTERMCAP specifies whether or not the
++	 * inbound Link supports unterminated line in HS mode. Setting this
++	 * attribute to 1 fixes moving to HS gear.
++	 */
++	UFSHCD_QUIRK_BROKEN_PA_RXHSUNTERMCAP		= 1 << 3,
++
++	/*
++	 * This quirk needs to be enabled if the host controller only allows
++	 * accessing the peer dme attributes in AUTO mode (FAST AUTO or
++	 * SLOW AUTO).
++	 */
++	UFSHCD_QUIRK_DME_PEER_ACCESS_AUTO_MODE		= 1 << 4,
++
++	/*
++	 * This quirk needs to be enabled if the host controller doesn't
++	 * advertise the correct version in UFS_VER register. If this quirk
++	 * is enabled, standard UFS host driver will call the vendor specific
++	 * ops (get_ufs_hci_version) to get the correct version.
++	 */
++	UFSHCD_QUIRK_BROKEN_UFS_HCI_VERSION		= 1 << 5,
++
++	/*
++	 * Clear handling for transfer/task request list is just opposite.
++	 */
++	UFSHCI_QUIRK_BROKEN_REQ_LIST_CLR		= 1 << 6,
++
++	/*
++	 * This quirk needs to be enabled if host controller doesn't allow
++	 * that the interrupt aggregation timer and counter are reset by s/w.
++	 */
++	UFSHCI_QUIRK_SKIP_RESET_INTR_AGGR		= 1 << 7,
++
++	/*
++	 * This quirks needs to be enabled if host controller cannot be
++	 * enabled via HCE register.
++	 */
++	UFSHCI_QUIRK_BROKEN_HCE				= 1 << 8,
++
++	/*
++	 * This quirk needs to be enabled if the host controller regards
++	 * resolution of the values of PRDTO and PRDTL in UTRD as byte.
++	 */
++	UFSHCD_QUIRK_PRDT_BYTE_GRAN			= 1 << 9,
++
++	/*
++	 * This quirk needs to be enabled if the host controller reports
++	 * OCS FATAL ERROR with device error through sense data
++	 */
++	UFSHCD_QUIRK_BROKEN_OCS_FATAL_ERROR		= 1 << 10,
++
++	/*
++	 * This quirk needs to be enabled if the host controller has
++	 * auto-hibernate capability but it doesn't work.
++	 */
++	UFSHCD_QUIRK_BROKEN_AUTO_HIBERN8		= 1 << 11,
++
++	/*
++	 * This quirk needs to disable manual flush for write booster
++	 */
++	UFSHCI_QUIRK_SKIP_MANUAL_WB_FLUSH_CTRL		= 1 << 12,
++
++	/*
++	 * This quirk needs to disable unipro timeout values
++	 * before power mode change
++	 */
++	UFSHCD_QUIRK_SKIP_DEF_UNIPRO_TIMEOUT_SETTING = 1 << 13,
++
++	/*
++	 * This quirk needs to be enabled if the host controller does not
++	 * support UIC command
++	 */
++	UFSHCD_QUIRK_BROKEN_UIC_CMD			= 1 << 15,
++
++	/*
++	 * This quirk needs to be enabled if the host controller cannot
++	 * support physical host configuration.
++	 */
++	UFSHCD_QUIRK_SKIP_PH_CONFIGURATION		= 1 << 16,
++
++	/*
++	 * This quirk needs to be enabled if the host controller has
++	 * auto-hibernate capability but it's FASTAUTO only.
++	 */
++	UFSHCD_QUIRK_HIBERN_FASTAUTO			= 1 << 18,
++
++	/*
++	 * This quirk needs to be enabled if the host controller needs
++	 * to reinit the device after switching to maximum gear.
++	 */
++	UFSHCD_QUIRK_REINIT_AFTER_MAX_GEAR_SWITCH       = 1 << 19,
++
++	/*
++	 * Some host raises interrupt (per queue) in addition to
++	 * CQES (traditional) when ESI is disabled.
++	 * Enable this quirk will disable CQES and use per queue interrupt.
++	 */
++	UFSHCD_QUIRK_MCQ_BROKEN_INTR			= 1 << 20,
++
++	/*
++	 * Some host does not implement SQ Run Time Command (SQRTC) register
++	 * thus need this quirk to skip related flow.
++	 */
++	UFSHCD_QUIRK_MCQ_BROKEN_RTC			= 1 << 21,
++
++	/*
++	 * This quirk needs to be enabled if the host controller supports inline
++	 * encryption but it needs to initialize the crypto capabilities in a
++	 * nonstandard way and/or needs to override blk_crypto_ll_ops.  If
++	 * enabled, the standard code won't initialize the blk_crypto_profile;
++	 * ufs_hba_variant_ops::init() must do it instead.
++	 */
++	UFSHCD_QUIRK_CUSTOM_CRYPTO_PROFILE		= 1 << 22,
++
++	/*
++	 * This quirk needs to be enabled if the host controller supports inline
++	 * encryption but does not support the CRYPTO_GENERAL_ENABLE bit, i.e.
++	 * host controller initialization fails if that bit is set.
++	 */
++	UFSHCD_QUIRK_BROKEN_CRYPTO_ENABLE		= 1 << 23,
++
++	/*
++	 * This quirk needs to be enabled if the host controller driver copies
++	 * cryptographic keys into the PRDT in order to send them to hardware,
++	 * and therefore the PRDT should be zeroized after each request (as per
++	 * the standard best practice for managing keys).
++	 */
++	UFSHCD_QUIRK_KEYS_IN_PRDT			= 1 << 24,
++
++	/*
++	 * This quirk indicates that the controller reports the value 1 (not
++	 * supported) in the Legacy Single DoorBell Support (LSDBS) bit of the
++	 * Controller Capabilities register although it supports the legacy
++	 * single doorbell mode.
++	 */
++	UFSHCD_QUIRK_BROKEN_LSDBS_CAP			= 1 << 25,
++
++	/*
++	 * This quirk indicates that DME_LINKSTARTUP should not be issued a 2nd
++	 * time (refer link_startup_again) after the 1st time was successful,
++	 * because it causes link startup to become unreliable.
++	 */
++	UFSHCD_QUIRK_PERFORM_LINK_STARTUP_ONCE		= 1 << 26,
++};
++
++enum ufshcd_caps {
++	/* Allow dynamic clk gating */
++	UFSHCD_CAP_CLK_GATING				= 1 << 0,
++
++	/* Allow hiberb8 with clk gating */
++	UFSHCD_CAP_HIBERN8_WITH_CLK_GATING		= 1 << 1,
++
++	/* Allow dynamic clk scaling */
++	UFSHCD_CAP_CLK_SCALING				= 1 << 2,
++
++	/* Allow auto bkops to enabled during runtime suspend */
++	UFSHCD_CAP_AUTO_BKOPS_SUSPEND			= 1 << 3,
++
++	/*
++	 * This capability allows host controller driver to use the UFS HCI's
++	 * interrupt aggregation capability.
++	 * CAUTION: Enabling this might reduce overall UFS throughput.
++	 */
++	UFSHCD_CAP_INTR_AGGR				= 1 << 4,
++
++	/*
++	 * This capability allows the device auto-bkops to be always enabled
++	 * except during suspend (both runtime and suspend).
++	 * Enabling this capability means that device will always be allowed
++	 * to do background operation when it's active but it might degrade
++	 * the performance of ongoing read/write operations.
++	 */
++	UFSHCD_CAP_KEEP_AUTO_BKOPS_ENABLED_EXCEPT_SUSPEND = 1 << 5,
++
++	/*
++	 * This capability allows host controller driver to automatically
++	 * enable runtime power management by itself instead of waiting
++	 * for userspace to control the power management.
++	 */
++	UFSHCD_CAP_RPM_AUTOSUSPEND			= 1 << 6,
++
++	/*
++	 * This capability allows the host controller driver to turn-on
++	 * WriteBooster, if the underlying device supports it and is
++	 * provisioned to be used. This would increase the write performance.
++	 */
++	UFSHCD_CAP_WB_EN				= 1 << 7,
++
++	/*
++	 * This capability allows the host controller driver to use the
++	 * inline crypto engine, if it is present
++	 */
++	UFSHCD_CAP_CRYPTO				= 1 << 8,
++
++	/*
++	 * This capability allows the controller regulators to be put into
++	 * lpm mode aggressively during clock gating.
++	 * This would increase power savings.
++	 */
++	UFSHCD_CAP_AGGR_POWER_COLLAPSE			= 1 << 9,
++
++	/*
++	 * This capability allows the host controller driver to use DeepSleep,
++	 * if it is supported by the UFS device. The host controller driver must
++	 * support device hardware reset via the hba->device_reset() callback,
++	 * in order to exit DeepSleep state.
++	 */
++	UFSHCD_CAP_DEEPSLEEP				= 1 << 10,
++
++	/*
++	 * This capability allows the host controller driver to use temperature
++	 * notification if it is supported by the UFS device.
++	 */
++	UFSHCD_CAP_TEMP_NOTIF				= 1 << 11,
++
++	/*
++	 * Enable WriteBooster when scaling up the clock and disable
++	 * WriteBooster when scaling the clock down.
++	 */
++	UFSHCD_CAP_WB_WITH_CLK_SCALING			= 1 << 12,
++};
++
++struct ufs_hba_variant_params {
++	struct devfreq_dev_profile devfreq_profile;
++	struct devfreq_simple_ondemand_data ondemand_data;
++	u16 hba_enable_delay_us;
++	u32 wb_flush_threshold;
++};
++
++struct ufs_hba_monitor {
++	unsigned long chunk_size;
++
++	unsigned long nr_sec_rw[2];
++	ktime_t total_busy[2];
++
++	unsigned long nr_req[2];
++	/* latencies*/
++	ktime_t lat_sum[2];
++	ktime_t lat_max[2];
++	ktime_t lat_min[2];
++
++	u32 nr_queued[2];
++	ktime_t busy_start_ts[2];
++
++	ktime_t enabled_ts;
++	bool enabled;
++};
++
++/**
++ * struct ufshcd_res_info_t - MCQ related resource regions
++ *
++ * @name: resource name
++ * @resource: pointer to resource region
++ * @base: register base address
++ */
++struct ufshcd_res_info {
++	const char *name;
++	struct resource *resource;
++	void __iomem *base;
++};
++
++enum ufshcd_res {
++	RES_UFS,
++	RES_MCQ,
++	RES_MCQ_SQD,
++	RES_MCQ_SQIS,
++	RES_MCQ_CQD,
++	RES_MCQ_CQIS,
++	RES_MCQ_VS,
++	RES_MAX,
++};
++
++/**
++ * struct ufshcd_mcq_opr_info_t - Operation and Runtime registers
++ *
++ * @offset: Doorbell Address Offset
++ * @stride: Steps proportional to queue [0...31]
++ * @base: base address
++ */
++struct ufshcd_mcq_opr_info_t {
++	unsigned long offset;
++	unsigned long stride;
++	void __iomem *base;
++};
++
++enum ufshcd_mcq_opr {
++	OPR_SQD,
++	OPR_SQIS,
++	OPR_CQD,
++	OPR_CQIS,
++	OPR_MAX,
++};
++
++/**
++ * struct ufs_hba - per adapter private structure
++ * @mmio_base: UFSHCI base register address
++ * @ucdl_base_addr: UFS Command Descriptor base address
++ * @utrdl_base_addr: UTP Transfer Request Descriptor base address
++ * @utmrdl_base_addr: UTP Task Management Descriptor base address
++ * @ucdl_dma_addr: UFS Command Descriptor DMA address
++ * @utrdl_dma_addr: UTRDL DMA address
++ * @utmrdl_dma_addr: UTMRDL DMA address
++ * @host: Scsi_Host instance of the driver
++ * @dev: device handle
++ * @ufs_device_wlun: WLUN that controls the entire UFS device.
++ * @hwmon_device: device instance registered with the hwmon core.
++ * @curr_dev_pwr_mode: active UFS device power mode.
++ * @uic_link_state: active state of the link to the UFS device.
++ * @rpm_lvl: desired UFS power management level during runtime PM.
++ * @spm_lvl: desired UFS power management level during system PM.
++ * @pm_op_in_progress: whether or not a PM operation is in progress.
++ * @ahit: value of Auto-Hibernate Idle Timer register.
++ * @lrb: local reference block
++ * @outstanding_tasks: Bits representing outstanding task requests
++ * @outstanding_lock: Protects @outstanding_reqs.
++ * @outstanding_reqs: Bits representing outstanding transfer requests
++ * @capabilities: UFS Controller Capabilities
++ * @mcq_capabilities: UFS Multi Circular Queue capabilities
++ * @nutrs: Transfer Request Queue depth supported by controller
++ * @nortt - Max outstanding RTTs supported by controller
++ * @nutmrs: Task Management Queue depth supported by controller
++ * @reserved_slot: Used to submit device commands. Protected by @dev_cmd.lock.
++ * @ufs_version: UFS Version to which controller complies
++ * @vops: pointer to variant specific operations
++ * @vps: pointer to variant specific parameters
++ * @priv: pointer to variant specific private data
++ * @sg_entry_size: size of struct ufshcd_sg_entry (may include variant fields)
++ * @irq: Irq number of the controller
++ * @is_irq_enabled: whether or not the UFS controller interrupt is enabled.
++ * @dev_ref_clk_freq: reference clock frequency
++ * @quirks: bitmask with information about deviations from the UFSHCI standard.
++ * @dev_quirks: bitmask with information about deviations from the UFS standard.
++ * @tmf_tag_set: TMF tag set.
++ * @tmf_queue: Used to allocate TMF tags.
++ * @tmf_rqs: array with pointers to TMF requests while these are in progress.
++ * @active_uic_cmd: handle of active UIC command
++ * @uic_cmd_mutex: mutex for UIC command
++ * @uic_async_done: completion used during UIC processing
++ * @ufshcd_state: UFSHCD state
++ * @eh_flags: Error handling flags
++ * @intr_mask: Interrupt Mask Bits
++ * @ee_ctrl_mask: Exception event control mask
++ * @ee_drv_mask: Exception event mask for driver
++ * @ee_usr_mask: Exception event mask for user (set via debugfs)
++ * @ee_ctrl_mutex: Used to serialize exception event information.
++ * @is_powered: flag to check if HBA is powered
++ * @shutting_down: flag to check if shutdown has been invoked
++ * @host_sem: semaphore used to serialize concurrent contexts
++ * @eh_wq: Workqueue that eh_work works on
++ * @eh_work: Worker to handle UFS errors that require s/w attention
++ * @eeh_work: Worker to handle exception events
++ * @errors: HBA errors
++ * @uic_error: UFS interconnect layer error status
++ * @saved_err: sticky error mask
++ * @saved_uic_err: sticky UIC error mask
++ * @ufs_stats: various error counters
++ * @force_reset: flag to force eh_work perform a full reset
++ * @force_pmc: flag to force a power mode change
++ * @silence_err_logs: flag to silence error logs
++ * @dev_cmd: ufs device management command information
++ * @last_dme_cmd_tstamp: time stamp of the last completed DME command
++ * @nop_out_timeout: NOP OUT timeout value
++ * @dev_info: information about the UFS device
++ * @auto_bkops_enabled: to track whether bkops is enabled in device
++ * @vreg_info: UFS device voltage regulator information
++ * @clk_list_head: UFS host controller clocks list node head
++ * @use_pm_opp: Indicates whether OPP based scaling is used or not
++ * @req_abort_count: number of times ufshcd_abort() has been called
++ * @lanes_per_direction: number of lanes per data direction between the UFS
++ *	controller and the UFS device.
++ * @pwr_info: holds current power mode
++ * @max_pwr_info: keeps the device max valid pwm
++ * @clk_gating: information related to clock gating
++ * @caps: bitmask with information about UFS controller capabilities
++ * @devfreq: frequency scaling information owned by the devfreq core
++ * @clk_scaling: frequency scaling information owned by the UFS driver
++ * @system_suspending: system suspend has been started and system resume has
++ *	not yet finished.
++ * @is_sys_suspended: UFS device has been suspended because of system suspend
++ * @urgent_bkops_lvl: keeps track of urgent bkops level for device
++ * @is_urgent_bkops_lvl_checked: keeps track if the urgent bkops level for
++ *  device is known or not.
++ * @wb_mutex: used to serialize devfreq and sysfs write booster toggling
++ * @clk_scaling_lock: used to serialize device commands and clock scaling
++ * @desc_size: descriptor sizes reported by device
++ * @scsi_block_reqs_cnt: reference counting for scsi block requests
++ * @bsg_dev: struct device associated with the BSG queue
++ * @bsg_queue: BSG queue associated with the UFS controller
++ * @rpm_dev_flush_recheck_work: used to suspend from RPM (runtime power
++ *	management) after the UFS device has finished a WriteBooster buffer
++ *	flush or auto BKOP.
++ * @monitor: statistics about UFS commands
++ * @crypto_capabilities: Content of crypto capabilities register (0x100)
++ * @crypto_cap_array: Array of crypto capabilities
++ * @crypto_cfg_register: Start of the crypto cfg array
++ * @crypto_profile: the crypto profile of this hba (if applicable)
++ * @debugfs_root: UFS controller debugfs root directory
++ * @debugfs_ee_work: used to restore ee_ctrl_mask after a delay
++ * @debugfs_ee_rate_limit_ms: user configurable delay after which to restore
++ *	ee_ctrl_mask
++ * @luns_avail: number of regular and well known LUNs supported by the UFS
++ *	device
++ * @nr_hw_queues: number of hardware queues configured
++ * @nr_queues: number of Queues of different queue types
++ * @complete_put: whether or not to call ufshcd_rpm_put() from inside
++ *	ufshcd_resume_complete()
++ * @ext_iid_sup: is EXT_IID is supported by UFSHC
++ * @mcq_sup: is mcq supported by UFSHC
++ * @mcq_enabled: is mcq ready to accept requests
++ * @res: array of resource info of MCQ registers
++ * @mcq_base: Multi circular queue registers base address
++ * @uhq: array of supported hardware queues
++ * @dev_cmd_queue: Queue for issuing device management commands
++ * @mcq_opr: MCQ operation and runtime registers
++ * @ufs_rtc_update_work: A work for UFS RTC periodic update
++ * @pm_qos_req: PM QoS request handle
++ * @pm_qos_enabled: flag to check if pm qos is enabled
++ */
++struct ufs_hba {
++	void __iomem *mmio_base;
++
++	/* Virtual memory reference */
++	struct utp_transfer_cmd_desc *ucdl_base_addr;
++	struct utp_transfer_req_desc *utrdl_base_addr;
++	struct utp_task_req_desc *utmrdl_base_addr;
++
++	/* DMA memory reference */
++	dma_addr_t ucdl_dma_addr;
++	dma_addr_t utrdl_dma_addr;
++	dma_addr_t utmrdl_dma_addr;
++
++	struct Scsi_Host *host;
++	struct device *dev;
++	struct scsi_device *ufs_device_wlun;
++
++#ifdef CONFIG_SCSI_UFS_HWMON
++	struct device *hwmon_device;
++#endif
++
++	enum ufs_dev_pwr_mode curr_dev_pwr_mode;
++	enum uic_link_state uic_link_state;
++	/* Desired UFS power management level during runtime PM */
++	enum ufs_pm_level rpm_lvl;
++	/* Desired UFS power management level during system PM */
++	enum ufs_pm_level spm_lvl;
++	int pm_op_in_progress;
++
++	/* Auto-Hibernate Idle Timer register value */
++	u32 ahit;
++
++	struct ufshcd_lrb *lrb;
++
++	unsigned long outstanding_tasks;
++	spinlock_t outstanding_lock;
++	unsigned long outstanding_reqs;
++
++	u32 capabilities;
++	int nutrs;
++	int nortt;
++	u32 mcq_capabilities;
++	int nutmrs;
++	u32 reserved_slot;
++	u32 ufs_version;
++	const struct ufs_hba_variant_ops *vops;
++	struct ufs_hba_variant_params *vps;
++	void *priv;
++#ifdef CONFIG_SCSI_UFS_VARIABLE_SG_ENTRY_SIZE
++	size_t sg_entry_size;
++#endif
++	unsigned int irq;
++	bool is_irq_enabled;
++	enum ufs_ref_clk_freq dev_ref_clk_freq;
++
++	unsigned int quirks;	/* Deviations from standard UFSHCI spec. */
++
++	/* Device deviations from standard UFS device spec. */
++	unsigned int dev_quirks;
++
++	struct blk_mq_tag_set tmf_tag_set;
++	struct request_queue *tmf_queue;
++	struct request **tmf_rqs;
++
++	struct uic_command *active_uic_cmd;
++	struct mutex uic_cmd_mutex;
++	struct completion *uic_async_done;
++
++	enum ufshcd_state ufshcd_state;
++	u32 eh_flags;
++	u32 intr_mask;
++	u16 ee_ctrl_mask;
++	u16 ee_drv_mask;
++	u16 ee_usr_mask;
++	struct mutex ee_ctrl_mutex;
++	bool is_powered;
++	bool shutting_down;
++	struct semaphore host_sem;
++
++	/* Work Queues */
++	struct workqueue_struct *eh_wq;
++	struct work_struct eh_work;
++	struct work_struct eeh_work;
++
++	/* HBA Errors */
++	u32 errors;
++	u32 uic_error;
++	u32 saved_err;
++	u32 saved_uic_err;
++	struct ufs_stats ufs_stats;
++	bool force_reset;
++	bool force_pmc;
++	bool silence_err_logs;
++
++	/* Device management request data */
++	struct ufs_dev_cmd dev_cmd;
++	ktime_t last_dme_cmd_tstamp;
++	int nop_out_timeout;
++
++	/* Keeps information of the UFS device connected to this host */
++	struct ufs_dev_info dev_info;
++	bool auto_bkops_enabled;
++	struct ufs_vreg_info vreg_info;
++	struct list_head clk_list_head;
++	bool use_pm_opp;
++
++	/* Number of requests aborts */
++	int req_abort_count;
++
++	/* Number of lanes available (1 or 2) for Rx/Tx */
++	u32 lanes_per_direction;
++	struct ufs_pa_layer_attr pwr_info;
++	struct ufs_pwr_mode_info max_pwr_info;
++
++	struct ufs_clk_gating clk_gating;
++	/* Control to enable/disable host capabilities */
++	u32 caps;
++
++	struct devfreq *devfreq;
++	struct ufs_clk_scaling clk_scaling;
++	bool system_suspending;
++	bool is_sys_suspended;
++
++	enum bkops_status urgent_bkops_lvl;
++	bool is_urgent_bkops_lvl_checked;
++
++	struct mutex wb_mutex;
++	struct rw_semaphore clk_scaling_lock;
++	atomic_t scsi_block_reqs_cnt;
++
++	struct device		bsg_dev;
++	struct request_queue	*bsg_queue;
++	struct delayed_work rpm_dev_flush_recheck_work;
++
++	struct ufs_hba_monitor	monitor;
++
++#ifdef CONFIG_SCSI_UFS_CRYPTO
++	union ufs_crypto_capabilities crypto_capabilities;
++	union ufs_crypto_cap_entry *crypto_cap_array;
++	u32 crypto_cfg_register;
++	struct blk_crypto_profile crypto_profile;
++#endif
++#ifdef CONFIG_DEBUG_FS
++	struct dentry *debugfs_root;
++	struct delayed_work debugfs_ee_work;
++	u32 debugfs_ee_rate_limit_ms;
++#endif
++#ifdef CONFIG_SCSI_UFS_FAULT_INJECTION
++	struct fault_attr trigger_eh_attr;
++	struct fault_attr timeout_attr;
++#endif
++	u32 luns_avail;
++	unsigned int nr_hw_queues;
++	unsigned int nr_queues[HCTX_MAX_TYPES];
++	bool complete_put;
++	bool ext_iid_sup;
++	bool scsi_host_added;
++	bool mcq_sup;
++	bool lsdb_sup;
++	bool mcq_enabled;
++	struct ufshcd_res_info res[RES_MAX];
++	void __iomem *mcq_base;
++	struct ufs_hw_queue *uhq;
++	struct ufs_hw_queue *dev_cmd_queue;
++	struct ufshcd_mcq_opr_info_t mcq_opr[OPR_MAX];
++
++	struct delayed_work ufs_rtc_update_work;
++	struct pm_qos_request pm_qos_req;
++	bool pm_qos_enabled;
++};
++
++/**
++ * struct ufs_hw_queue - per hardware queue structure
++ * @mcq_sq_head: base address of submission queue head pointer
++ * @mcq_sq_tail: base address of submission queue tail pointer
++ * @mcq_cq_head: base address of completion queue head pointer
++ * @mcq_cq_tail: base address of completion queue tail pointer
++ * @sqe_base_addr: submission queue entry base address
++ * @sqe_dma_addr: submission queue dma address
++ * @cqe_base_addr: completion queue base address
++ * @cqe_dma_addr: completion queue dma address
++ * @max_entries: max number of slots in this hardware queue
++ * @id: hardware queue ID
++ * @sq_tp_slot: current slot to which SQ tail pointer is pointing
++ * @sq_lock: serialize submission queue access
++ * @cq_tail_slot: current slot to which CQ tail pointer is pointing
++ * @cq_head_slot: current slot to which CQ head pointer is pointing
++ * @cq_lock: Synchronize between multiple polling instances
++ * @sq_mutex: prevent submission queue concurrent access
++ */
++struct ufs_hw_queue {
++	void __iomem *mcq_sq_head;
++	void __iomem *mcq_sq_tail;
++	void __iomem *mcq_cq_head;
++	void __iomem *mcq_cq_tail;
++
++	struct utp_transfer_req_desc *sqe_base_addr;
++	dma_addr_t sqe_dma_addr;
++	struct cq_entry *cqe_base_addr;
++	dma_addr_t cqe_dma_addr;
++	u32 max_entries;
++	u32 id;
++	u32 sq_tail_slot;
++	spinlock_t sq_lock;
++	u32 cq_tail_slot;
++	u32 cq_head_slot;
++	spinlock_t cq_lock;
++	/* prevent concurrent access to submission queue */
++	struct mutex sq_mutex;
++};
++
++#define MCQ_QCFG_SIZE		0x40
++
++static inline unsigned int ufshcd_mcq_opr_offset(struct ufs_hba *hba,
++		enum ufshcd_mcq_opr opr, int idx)
++{
++	return hba->mcq_opr[opr].offset + hba->mcq_opr[opr].stride * idx;
++}
++
++static inline unsigned int ufshcd_mcq_cfg_offset(unsigned int reg, int idx)
++{
++	return reg + MCQ_QCFG_SIZE * idx;
++}
++
++#ifdef CONFIG_SCSI_UFS_VARIABLE_SG_ENTRY_SIZE
++static inline size_t ufshcd_sg_entry_size(const struct ufs_hba *hba)
++{
++	return hba->sg_entry_size;
++}
++
++static inline void ufshcd_set_sg_entry_size(struct ufs_hba *hba, size_t sg_entry_size)
++{
++	WARN_ON_ONCE(sg_entry_size < sizeof(struct ufshcd_sg_entry));
++	hba->sg_entry_size = sg_entry_size;
++}
++#else
++static inline size_t ufshcd_sg_entry_size(const struct ufs_hba *hba)
++{
++	return sizeof(struct ufshcd_sg_entry);
++}
++
++#define ufshcd_set_sg_entry_size(hba, sg_entry_size)                   \
++	({ (void)(hba); BUILD_BUG_ON(sg_entry_size != sizeof(struct ufshcd_sg_entry)); })
++#endif
++
++static inline size_t ufshcd_get_ucd_size(const struct ufs_hba *hba)
++{
++	return sizeof(struct utp_transfer_cmd_desc) + SG_ALL * ufshcd_sg_entry_size(hba);
++}
++
++/* Returns true if clocks can be gated. Otherwise false */
++static inline bool ufshcd_is_clkgating_allowed(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_CLK_GATING;
++}
++static inline bool ufshcd_can_hibern8_during_gating(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_HIBERN8_WITH_CLK_GATING;
++}
++static inline int ufshcd_is_clkscaling_supported(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_CLK_SCALING;
++}
++static inline bool ufshcd_can_autobkops_during_suspend(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_AUTO_BKOPS_SUSPEND;
++}
++static inline bool ufshcd_is_rpm_autosuspend_allowed(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_RPM_AUTOSUSPEND;
++}
++
++static inline bool ufshcd_is_intr_aggr_allowed(struct ufs_hba *hba)
++{
++	return (hba->caps & UFSHCD_CAP_INTR_AGGR) &&
++		!(hba->quirks & UFSHCD_QUIRK_BROKEN_INTR_AGGR);
++}
++
++static inline bool ufshcd_can_aggressive_pc(struct ufs_hba *hba)
++{
++	return !!(ufshcd_is_link_hibern8(hba) &&
++		  (hba->caps & UFSHCD_CAP_AGGR_POWER_COLLAPSE));
++}
++
++static inline bool ufshcd_is_auto_hibern8_supported(struct ufs_hba *hba)
++{
++	return (hba->capabilities & MASK_AUTO_HIBERN8_SUPPORT) &&
++		!(hba->quirks & UFSHCD_QUIRK_BROKEN_AUTO_HIBERN8);
++}
++
++static inline bool ufshcd_is_auto_hibern8_enabled(struct ufs_hba *hba)
++{
++	return FIELD_GET(UFSHCI_AHIBERN8_TIMER_MASK, hba->ahit);
++}
++
++static inline bool ufshcd_is_wb_allowed(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_WB_EN;
++}
++
++static inline bool ufshcd_enable_wb_if_scaling_up(struct ufs_hba *hba)
++{
++	return hba->caps & UFSHCD_CAP_WB_WITH_CLK_SCALING;
++}
++
++#define ufsmcq_writel(hba, val, reg)	\
++	writel((val), (hba)->mcq_base + (reg))
++#define ufsmcq_readl(hba, reg)	\
++	readl((hba)->mcq_base + (reg))
++
++#define ufsmcq_writelx(hba, val, reg)	\
++	writel_relaxed((val), (hba)->mcq_base + (reg))
++#define ufsmcq_readlx(hba, reg)	\
++	readl_relaxed((hba)->mcq_base + (reg))
++
++#define ufshcd_writel(hba, val, reg)	\
++	writel((val), (hba)->mmio_base + (reg))
++#define ufshcd_readl(hba, reg)	\
++	readl((hba)->mmio_base + (reg))
++
++/**
++ * ufshcd_rmwl - perform read/modify/write for a controller register
++ * @hba: per adapter instance
++ * @mask: mask to apply on read value
++ * @val: actual value to write
++ * @reg: register address
++ */
++static inline void ufshcd_rmwl(struct ufs_hba *hba, u32 mask, u32 val, u32 reg)
++{
++	u32 tmp;
++
++	tmp = ufshcd_readl(hba, reg);
++	tmp &= ~mask;
++	tmp |= (val & mask);
++	ufshcd_writel(hba, tmp, reg);
++}
++
++void ufshcd_enable_irq(struct ufs_hba *hba);
++void ufshcd_disable_irq(struct ufs_hba *hba);
++int ufshcd_alloc_host(struct device *, struct ufs_hba **);
++int ufshcd_hba_enable(struct ufs_hba *hba);
++int ufshcd_init(struct ufs_hba *, void __iomem *, unsigned int);
++int ufshcd_link_recovery(struct ufs_hba *hba);
++int ufshcd_make_hba_operational(struct ufs_hba *hba);
++void ufshcd_remove(struct ufs_hba *);
++int ufshcd_uic_hibern8_enter(struct ufs_hba *hba);
++int ufshcd_uic_hibern8_exit(struct ufs_hba *hba);
++void ufshcd_delay_us(unsigned long us, unsigned long tolerance);
++void ufshcd_parse_dev_ref_clk_freq(struct ufs_hba *hba, struct clk *refclk);
++void ufshcd_update_evt_hist(struct ufs_hba *hba, u32 id, u32 val);
++void ufshcd_hba_stop(struct ufs_hba *hba);
++void ufshcd_schedule_eh_work(struct ufs_hba *hba);
++void ufshcd_mcq_config_mac(struct ufs_hba *hba, u32 max_active_cmds);
++unsigned int ufshcd_mcq_queue_cfg_addr(struct ufs_hba *hba);
++u32 ufshcd_mcq_read_cqis(struct ufs_hba *hba, int i);
++void ufshcd_mcq_write_cqis(struct ufs_hba *hba, u32 val, int i);
++unsigned long ufshcd_mcq_poll_cqe_lock(struct ufs_hba *hba,
++					 struct ufs_hw_queue *hwq);
++void ufshcd_mcq_make_queues_operational(struct ufs_hba *hba);
++void ufshcd_mcq_enable_esi(struct ufs_hba *hba);
++void ufshcd_mcq_enable(struct ufs_hba *hba);
++void ufshcd_mcq_config_esi(struct ufs_hba *hba, struct msi_msg *msg);
++
++int ufshcd_opp_config_clks(struct device *dev, struct opp_table *opp_table,
++			   struct dev_pm_opp *opp, void *data,
++			   bool scaling_down);
++/**
++ * ufshcd_set_variant - set variant specific data to the hba
++ * @hba: per adapter instance
++ * @variant: pointer to variant specific data
++ */
++static inline void ufshcd_set_variant(struct ufs_hba *hba, void *variant)
++{
++	BUG_ON(!hba);
++	hba->priv = variant;
++}
++
++/**
++ * ufshcd_get_variant - get variant specific data from the hba
++ * @hba: per adapter instance
++ */
++static inline void *ufshcd_get_variant(struct ufs_hba *hba)
++{
++	BUG_ON(!hba);
++	return hba->priv;
++}
++
++#ifdef CONFIG_PM
++extern int ufshcd_runtime_suspend(struct device *dev);
++extern int ufshcd_runtime_resume(struct device *dev);
++#endif
++#ifdef CONFIG_PM_SLEEP
++extern int ufshcd_system_suspend(struct device *dev);
++extern int ufshcd_system_resume(struct device *dev);
++extern int ufshcd_system_freeze(struct device *dev);
++extern int ufshcd_system_thaw(struct device *dev);
++extern int ufshcd_system_restore(struct device *dev);
++#endif
++
++extern int ufshcd_dme_configure_adapt(struct ufs_hba *hba,
++				      int agreed_gear,
++				      int adapt_val);
++extern int ufshcd_dme_set_attr(struct ufs_hba *hba, u32 attr_sel,
++			       u8 attr_set, u32 mib_val, u8 peer);
++extern int ufshcd_dme_get_attr(struct ufs_hba *hba, u32 attr_sel,
++			       u32 *mib_val, u8 peer);
++extern int ufshcd_config_pwr_mode(struct ufs_hba *hba,
++			struct ufs_pa_layer_attr *desired_pwr_mode);
++extern int ufshcd_uic_change_pwr_mode(struct ufs_hba *hba, u8 mode);
++
++/* UIC command interfaces for DME primitives */
++#define DME_LOCAL	0
++#define DME_PEER	1
++#define ATTR_SET_NOR	0	/* NORMAL */
++#define ATTR_SET_ST	1	/* STATIC */
++
++static inline int ufshcd_dme_set(struct ufs_hba *hba, u32 attr_sel,
++				 u32 mib_val)
++{
++	return ufshcd_dme_set_attr(hba, attr_sel, ATTR_SET_NOR,
++				   mib_val, DME_LOCAL);
++}
++
++static inline int ufshcd_dme_st_set(struct ufs_hba *hba, u32 attr_sel,
++				    u32 mib_val)
++{
++	return ufshcd_dme_set_attr(hba, attr_sel, ATTR_SET_ST,
++				   mib_val, DME_LOCAL);
++}
++
++static inline int ufshcd_dme_peer_set(struct ufs_hba *hba, u32 attr_sel,
++				      u32 mib_val)
++{
++	return ufshcd_dme_set_attr(hba, attr_sel, ATTR_SET_NOR,
++				   mib_val, DME_PEER);
++}
++
++static inline int ufshcd_dme_peer_st_set(struct ufs_hba *hba, u32 attr_sel,
++					 u32 mib_val)
++{
++	return ufshcd_dme_set_attr(hba, attr_sel, ATTR_SET_ST,
++				   mib_val, DME_PEER);
++}
++
++static inline int ufshcd_dme_get(struct ufs_hba *hba,
++				 u32 attr_sel, u32 *mib_val)
++{
++	return ufshcd_dme_get_attr(hba, attr_sel, mib_val, DME_LOCAL);
++}
++
++static inline int ufshcd_dme_peer_get(struct ufs_hba *hba,
++				      u32 attr_sel, u32 *mib_val)
++{
++	return ufshcd_dme_get_attr(hba, attr_sel, mib_val, DME_PEER);
++}
++
++static inline bool ufshcd_is_hs_mode(struct ufs_pa_layer_attr *pwr_info)
++{
++	return (pwr_info->pwr_rx == FAST_MODE ||
++		pwr_info->pwr_rx == FASTAUTO_MODE) &&
++		(pwr_info->pwr_tx == FAST_MODE ||
++		pwr_info->pwr_tx == FASTAUTO_MODE);
++}
++
++static inline int ufshcd_disable_host_tx_lcc(struct ufs_hba *hba)
++{
++	return ufshcd_dme_set(hba, UIC_ARG_MIB(PA_LOCAL_TX_LCC_ENABLE), 0);
++}
++
++void ufshcd_auto_hibern8_update(struct ufs_hba *hba, u32 ahit);
++void ufshcd_fixup_dev_quirks(struct ufs_hba *hba,
++			     const struct ufs_dev_quirk *fixups);
++#define SD_ASCII_STD true
++#define SD_RAW false
++int ufshcd_read_string_desc(struct ufs_hba *hba, u8 desc_index,
++			    u8 **buf, bool ascii);
++
++void ufshcd_hold(struct ufs_hba *hba);
++void ufshcd_release(struct ufs_hba *hba);
++
++void ufshcd_clkgate_delay_set(struct device *dev, unsigned long value);
++
++int ufshcd_get_vreg(struct device *dev, struct ufs_vreg *vreg);
++
++int ufshcd_send_uic_cmd(struct ufs_hba *hba, struct uic_command *uic_cmd);
++
++int ufshcd_advanced_rpmb_req_handler(struct ufs_hba *hba, struct utp_upiu_req *req_upiu,
++				     struct utp_upiu_req *rsp_upiu, struct ufs_ehs *ehs_req,
++				     struct ufs_ehs *ehs_rsp, int sg_cnt,
++				     struct scatterlist *sg_list, enum dma_data_direction dir);
++int ufshcd_wb_toggle(struct ufs_hba *hba, bool enable);
++int ufshcd_wb_toggle_buf_flush(struct ufs_hba *hba, bool enable);
++int ufshcd_suspend_prepare(struct device *dev);
++int __ufshcd_suspend_prepare(struct device *dev, bool rpm_ok_for_spm);
++void ufshcd_resume_complete(struct device *dev);
++bool ufshcd_is_hba_active(struct ufs_hba *hba);
++void ufshcd_pm_qos_init(struct ufs_hba *hba);
++void ufshcd_pm_qos_exit(struct ufs_hba *hba);
++
++/* Wrapper functions for safely calling variant operations */
++static inline int ufshcd_vops_init(struct ufs_hba *hba)
++{
++	if (hba->vops && hba->vops->init)
++		return hba->vops->init(hba);
++
++	return 0;
++}
++
++static inline int ufshcd_vops_phy_initialization(struct ufs_hba *hba)
++{
++	if (hba->vops && hba->vops->phy_initialization)
++		return hba->vops->phy_initialization(hba);
++
++	return 0;
++}
++
++extern const struct ufs_pm_lvl_states ufs_pm_lvl_states[];
++
++int ufshcd_dump_regs(struct ufs_hba *hba, size_t offset, size_t len,
++		     const char *prefix);
++
++int __ufshcd_write_ee_control(struct ufs_hba *hba, u32 ee_ctrl_mask);
++int ufshcd_write_ee_control(struct ufs_hba *hba);
++int ufshcd_update_ee_control(struct ufs_hba *hba, u16 *mask,
++			     const u16 *other_mask, u16 set, u16 clr);
++void ufshcd_force_error_recovery(struct ufs_hba *hba);
++
++#endif /* End of Header */
+-- 
+2.43.0
+
