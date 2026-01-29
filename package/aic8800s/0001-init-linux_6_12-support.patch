@@ -1,0 +1,289 @@
+From fcd4508d736003004936c19ea3aa0b2e5c82e047 Mon Sep 17 00:00:00 2001
+From: yanjilu <yanjilu@mixwan.net>
+Date: Wed, 28 Jan 2026 21:17:11 +0800
+Subject: [PATCH] init linux_6_12 support
+
+---
+ debian/changelog                              | 13 ++++
+ debian/patches/fix-linux-6.19-build.patch     | 72 +++++++++++++++++++
+ debian/patches/series                         |  1 +
+ src/SDIO/driver_fw/driver/aic8800/Kconfig     |  4 +-
+ .../driver/aic8800/aic8800_bsp/Makefile       |  4 +-
+ .../driver/aic8800/aic8800_fdrv/rwnx_main.c   | 43 +++++++++--
+ .../driver/aic8800/aic8800_fdrv/rwnx_radar.c  | 22 ++++--
+ 7 files changed, 143 insertions(+), 16 deletions(-)
+ create mode 100644 debian/patches/fix-linux-6.19-build.patch
+
+diff --git a/debian/changelog b/debian/changelog
+index 58b632b..578a2bf 100644
+--- a/debian/changelog
++++ b/debian/changelog
+@@ -1,3 +1,16 @@
++aic8800 (4.0+git20250410.b99ca8b6-5) noble; urgency=medium
++
++  [ dependabot[bot] ]
++  * chore(deps): bump actions/download-artifact from 6 to 7
++
++  [ CodeChenL ]
++  * feat: add pkg.conf.template
++
++  [ Jianfeng Liu ]
++  * add fix for linux v6.19
++
++ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Tue, 30 Dec 2025 08:12:48 +0000
++
+ aic8800 (4.0+git20250410.b99ca8b6-4) noble; urgency=medium
+ 
+   [ dependabot[bot] ]
+diff --git a/debian/patches/fix-linux-6.19-build.patch b/debian/patches/fix-linux-6.19-build.patch
+new file mode 100644
+index 0000000..4c4ce45
+--- /dev/null
++++ b/debian/patches/fix-linux-6.19-build.patch
+@@ -0,0 +1,72 @@
++diff --git a/src/PCIE/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c b/src/PCIE/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
++index a5d0502..1c081aa 100644
++--- a/src/PCIE/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
+++++ b/src/PCIE/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
++@@ -319,7 +319,11 @@ static int rwnx_send_msg(struct rwnx_hw *rwnx_hw, const void *msg_params,
++ 
++ 	//RWNX_DBG(RWNX_FN_ENTRY_STR);
++     AICWFDBG(LOGTRACE, "%s (%d)%s reqcfm:%d in_irq:%d in_softirq:%d in_atomic:%d\r\n",
+++#if (LINUX_VERSION_CODE <= KERNEL_VERSION(6, 18, 0))
++     __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_irq(), (int)in_softirq(), (int)in_atomic());
+++#else
+++    __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_hardirq(), (int)in_softirq(), (int)in_atomic());
+++#endif
++ 
++ 
++ #ifdef AICWF_USB_SUPPORT
++@@ -451,7 +455,11 @@ static int rwnx_send_msg1(struct rwnx_hw *rwnx_hw, const void *msg_params,
++ 
++ //	RWNX_DBG(RWNX_FN_ENTRY_STR);
++     printk("%s (%d)%s reqcfm:%d in_irq:%d in_softirq:%d in_atomic:%d\r\n",
+++#if (LINUX_VERSION_CODE <= KERNEL_VERSION(6, 18, 0))
++     __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_irq(), (int)in_softirq(), (int)in_atomic());
+++#else
+++    __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_hardirq(), (int)in_softirq(), (int)in_atomic());
+++#endif
++ 
++ #ifdef AICWF_SDIO_SUPPORT
++ 	rwnx_pm_stay_awake(rwnx_hw->sdiodev);
++diff --git a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
++index b4414b6..87b4d0c 100644
++--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
+++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
++@@ -307,7 +307,11 @@ static int rwnx_send_msg(struct rwnx_hw *rwnx_hw, const void *msg_params,
++ 
++ 	//RWNX_DBG(RWNX_FN_ENTRY_STR);
++     AICWFDBG(LOGTRACE, "%s (%d)%s reqcfm:%d in_irq:%d in_softirq:%d in_atomic:%d\r\n",
+++#if (LINUX_VERSION_CODE <= KERNEL_VERSION(6, 18, 0))
++     __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_irq(), (int)in_softirq(), (int)in_atomic());
+++#else
+++    __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_hardirq(), (int)in_softirq(), (int)in_atomic());
+++#endif
++ 
++ 
++ #ifdef AICWF_USB_SUPPORT
++@@ -415,7 +419,11 @@ static int rwnx_send_msg1(struct rwnx_hw *rwnx_hw, const void *msg_params,
++ 
++ //	RWNX_DBG(RWNX_FN_ENTRY_STR);
++     printk("%s (%d)%s reqcfm:%d in_irq:%d in_softirq:%d in_atomic:%d\r\n",
+++#if (LINUX_VERSION_CODE <= KERNEL_VERSION(6, 18, 0))
++     __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_irq(), (int)in_softirq(), (int)in_atomic());
+++#else
+++    __func__, reqid, RWNX_ID2STR(reqid), reqcfm, (int)in_hardirq(), (int)in_softirq(), (int)in_atomic());
+++#endif
++ 
++ 	rwnx_wakeup_lock(rwnx_hw->ws_tx);
++ 	msg = container_of((void *)msg_params, struct lmac_msg, param);
++diff --git a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c
++index 7219a54..c74e0d9 100644
++--- a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c
+++++ b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c
++@@ -1475,7 +1475,11 @@ void reord_deinit_sta(struct aicwf_rx_priv* rx_priv, struct reord_ctrl_info *reo
++             reord_rxframe_free(&rx_priv->freeq_lock, &rx_priv->rxframes_freequeue, &req->rxframe_list);
++         }
++ 
+++#if (LINUX_VERSION_CODE <= KERNEL_VERSION(6, 18, 0))
++ 		AICWFDBG(LOGINFO, "reord dinit in_irq():%d in_atomic:%d in_softirq:%d\r\n", (int)in_irq()
+++#else
+++		AICWFDBG(LOGINFO, "reord dinit in_irq():%d in_atomic:%d in_softirq:%d\r\n", (int)in_hardirq()
+++#endif
++ 			,(int)in_atomic(), (int)in_softirq());
++         spin_unlock_bh(&preorder_ctrl->reord_list_lock);
++     }
+diff --git a/debian/patches/series b/debian/patches/series
+index 081be82..3869155 100644
+--- a/debian/patches/series
++++ b/debian/patches/series
+@@ -21,3 +21,4 @@ fix-aic_btusb-use-bluez-by-default.patch
+ fix-usbc1-controller-wifi-rate-of-sun60iw2p1.patch
+ fix-linux-6.17-build.patch
+ fix-Lower-the-debugging-log-level.patch
++fix-linux-6.19-build.patch
+diff --git a/src/SDIO/driver_fw/driver/aic8800/Kconfig b/src/SDIO/driver_fw/driver/aic8800/Kconfig
+index 66c20f6..90f674b 100644
+--- a/src/SDIO/driver_fw/driver/aic8800/Kconfig
++++ b/src/SDIO/driver_fw/driver/aic8800/Kconfig
+@@ -7,8 +7,8 @@ config AIC_WLAN_SUPPORT
+ config AIC_FW_PATH
+ 	depends on AIC_WLAN_SUPPORT
+ 	string "Firmware & config file path"
+-	default "/vendor/etc/firmware"
+-	#default "/lib/firmware/aic8800_sdio"
++	#default "/vendor/etc/firmware"
++	default "/lib/firmware/aic8800"
+ 	help
+ 	  Path to the firmware & config file.
+ 
+diff --git a/src/SDIO/driver_fw/driver/aic8800/aic8800_bsp/Makefile b/src/SDIO/driver_fw/driver/aic8800/aic8800_bsp/Makefile
+index 8a3ddd7..803a8ee 100644
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_bsp/Makefile
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_bsp/Makefile
+@@ -1,7 +1,7 @@
+ CONFIG_SDIO_SUPPORT := y
+ CONFIG_SDIO_PWRCTRL := y
+-CONFIG_AIC_FW_PATH = "/vendor/etc/firmware"
+-#CONFIG_AIC_FW_PATH = "/lib/firmware/aic8800D80"
++#CONFIG_AIC_FW_PATH = "/vendor/etc/firmware"
++CONFIG_AIC_FW_PATH = "/lib/firmware/aic8800"
+ export CONFIG_AIC_FW_PATH
+ ccflags-y += -DCONFIG_AIC_FW_PATH=\"$(CONFIG_AIC_FW_PATH)\"
+ 
+diff --git a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_main.c b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_main.c
+index 7136456..a5af2e4 100644
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_main.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_main.c
+@@ -787,9 +787,7 @@ static void rwnx_csa_finish(struct work_struct *ws)
+ 		} else
+ 			rwnx_txq_vif_stop(vif, RWNX_TXQ_STOP_CHAN, rwnx_hw);
+ 		spin_unlock_bh(&rwnx_hw->cb_lock);
+-#if (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION3)
+-		cfg80211_ch_switch_notify(vif->ndev, &csa->chandef, 0, 0);
+-#elif (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION)
++#if (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION)
+ 		cfg80211_ch_switch_notify(vif->ndev, &csa->chandef, 0);
+ #else
+ 		cfg80211_ch_switch_notify(vif->ndev, &csa->chandef);
+@@ -3320,6 +3318,34 @@ end:
+  * @change_beacon: Change the beacon parameters for an access point mode
+  *	interface. This should reject the call when AP mode wasn't started.
+  */
++#if (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2)
++static int rwnx_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
++									   struct cfg80211_ap_update *info)
++{
++	struct rwnx_hw *rwnx_hw = wiphy_priv(wiphy);
++	struct rwnx_vif *vif = netdev_priv(dev);
++	struct rwnx_bcn *bcn = &vif->ap.bcn;
++	struct rwnx_ipc_elem_var elem;
++	u8 *buf;
++	int error = 0;
++	elem.dma_addr = 0;
++
++	RWNX_DBG(RWNX_FN_ENTRY_STR);
++
++	// Build the beacon
++	buf = rwnx_build_bcn(bcn, &info->beacon);
++	if (!buf)
++		return -ENOMEM;
++
++	rwnx_send_bcn(rwnx_hw, buf, vif->vif_index, bcn->len);
++
++	// Forward the information to the LMAC
++	error = rwnx_send_bcn_change(rwnx_hw, vif->vif_index, 0,
++								 bcn->len, bcn->head_len, bcn->tim_len, NULL);
++
++	return error;
++}
++#else
+ static int rwnx_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+ 									   struct cfg80211_beacon_data *info)
+ {
+@@ -3346,6 +3372,7 @@ static int rwnx_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *d
+ 
+ 	return error;
+ }
++#endif
+ 
+ /**
+  * * @stop_ap: Stop being an AP, including stopping beaconing.
+@@ -4010,6 +4037,9 @@ int rwnx_cfg80211_start_radar_detection(struct wiphy *wiphy,
+ 										struct cfg80211_chan_def *chandef
+ 									#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0))
+ 										, u32 cac_time_ms
++									#endif
++									#if (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2)
++										, int link_id
+ 									#endif
+ 										)
+ {
+@@ -4151,9 +4181,7 @@ int rwnx_cfg80211_channel_switch (struct wiphy *wiphy,
+ 		goto end;
+ 	} else {
+ 		INIT_WORK(&csa->work, rwnx_csa_finish);
+-#if LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION4
+-		cfg80211_ch_switch_started_notify(dev, &csa->chandef, 0, params->count, false, 0);
+-#elif LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2
++#if LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2
+ 		cfg80211_ch_switch_started_notify(dev, &csa->chandef, 0, params->count, false);
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+ 		cfg80211_ch_switch_started_notify(dev, &csa->chandef, params->count, params->block_tx);
+@@ -4179,6 +4207,9 @@ rwnx_cfg80211_tdls_mgmt(struct wiphy *wiphy,
+ 	const u8 *peer,
+ #else
+ 	u8 *peer,
++#endif
++#if LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2
++	int link_id,
+ #endif
+ 	u8 action_code,
+ 	u8 dialog_token,
+diff --git a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_radar.c b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_radar.c
+index a47b678..863a5ac 100644
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_radar.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_radar.c
+@@ -1400,11 +1400,16 @@ static void rwnx_radar_cac_work(struct work_struct *ws)
+ 	}
+ 
+ 	ctxt = &rwnx_hw->chanctx_table[radar->cac_vif->ch_index];
++#if (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2)
++	cfg80211_cac_event(radar->cac_vif->ndev, &ctxt->chan_def,
++					   NL80211_RADAR_CAC_FINISHED, GFP_KERNEL, 0);
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0))
++	cfg80211_cac_event(radar->cac_vif->ndev, &ctxt->chan_def,
++					   NL80211_RADAR_CAC_FINISHED, GFP_KERNEL);
++#else
+ 	cfg80211_cac_event(radar->cac_vif->ndev,
+-					#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)
+-					   &ctxt->chan_def,
+-					#endif
+ 					   NL80211_RADAR_CAC_FINISHED, GFP_KERNEL);
++#endif
+ 	rwnx_send_apm_stop_cac_req(rwnx_hw, radar->cac_vif);
+ 	rwnx_chanctx_unlink(radar->cac_vif);
+ 
+@@ -1500,11 +1505,16 @@ void rwnx_radar_cancel_cac(struct rwnx_radar *radar)
+ 		struct rwnx_chanctx *ctxt;
+ 		ctxt = &rwnx_hw->chanctx_table[radar->cac_vif->ch_index];
+ 		rwnx_send_apm_stop_cac_req(rwnx_hw, radar->cac_vif);
++#if (LINUX_VERSION_CODE >= HIGH_KERNEL_VERSION2)
++		cfg80211_cac_event(radar->cac_vif->ndev, &ctxt->chan_def,
++						   NL80211_RADAR_CAC_ABORTED, GFP_KERNEL, 0);
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0))
++		cfg80211_cac_event(radar->cac_vif->ndev, &ctxt->chan_def,
++						   NL80211_RADAR_CAC_ABORTED, GFP_KERNEL);
++#else
+ 		cfg80211_cac_event(radar->cac_vif->ndev,
+-						#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)
+-						   &ctxt->chan_def,
+-						#endif
+ 						   NL80211_RADAR_CAC_ABORTED, GFP_KERNEL);
++#endif
+ 		rwnx_chanctx_unlink(radar->cac_vif);
+ 	}
+ 
+-- 
+2.43.0
+

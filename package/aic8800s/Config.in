@@ -1,0 +1,9 @@
+config BR2_PACKAGE_AIC8800S
+    bool "aic8800s"
+    depends on BR2_LINUX_KERNEL
+    help
+      This is a wireless lan driver for aic8800 sdio base on
+      https://github.com/radxa-pkg/aic8800 with patches.
+
+comment "aic8800s needs a Linux kernel and headers >= 6.12"
+    depends on !BR2_LINUX_KERNEL
