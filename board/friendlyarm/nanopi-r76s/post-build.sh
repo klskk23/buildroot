@@ -1,0 +1,1 @@
+../../rockchip/common/post-build.sh

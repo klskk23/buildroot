@@ -1,0 +1,2 @@
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan0", RUN+="/etc/init.d/S100hostapd start"
+ACTION=="remove", SUBSYSTEM=="net", KERNEL=="wlan0", RUN+="/etc/init.d/S100hostapd stop"
