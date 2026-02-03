@@ -1,3 +1,20 @@
+# BUILDROOT FOR ROCKCHIP
+There is a fork of official buildroot repo for mulitple rockchip devices. And the linux kernel comes from the [lede](https://github.com/coolsnowwolf/lede) repository.
+# Support devices (Officical support devices not included)
+code| meaning
+--|--
+Y | Yes, fully implemented
+P | Partially implemented
+N | Not working yet
+| | Untested
+|-| Not applicable -- device does not have feature
+
+Device |HDMI | USB | PCIE | NPU | GPU | WIFI | ETHERNET |
+-- | -- | -- | -- | -- | -- | -- | -- 
+hinlink-opc-h29k | N | Y | Y |-|N|Y|Y
+friendlyarm-nanopi-r76s| P | Y | - | 
+
+# ----------
 Buildroot is a simple, efficient and easy-to-use tool to generate embedded
 Linux systems through cross-compilation.
 
